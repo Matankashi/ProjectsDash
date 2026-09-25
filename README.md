@@ -1,13 +1,13 @@
 # Projects app
 
-**Version: v1.0** (tagged only after the live site is confirmed working)
+**Version: v1.0**
 
 A private dashboard for personal projects. The first project is the Madrid field trial
 ("מדריד: ניסוי שטח"), moved here from a claude.ai artifact. Static site on GitHub Pages, data in
 Firestore, sign-in with Firebase email/password, and the schedule read from Google Calendar
 (read-only).
 
-Live: https://matankashi.github.io/projectsDash/
+Live: https://matankashi.github.io/ProjectsDash/
 
 ## Files
 

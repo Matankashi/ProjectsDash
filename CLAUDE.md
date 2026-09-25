@@ -1,9 +1,9 @@
 # Projects app
 
-**Version: v1.0** (not tagged yet: `v1.0` is tagged only after the user confirms the live site)
+**Version: v1.0**
 
-A private project dashboard: static files on GitHub Pages (`https://matankashi.github.io/projectsDash/`,
-repo `git@github.com:Matankashi/projectsDash.git`, served from `main`), Firestore for data,
+A private project dashboard: static files on GitHub Pages (`https://matankashi.github.io/ProjectsDash/`,
+repo `git@github.com:Matankashi/ProjectsDash.git`, served from `main`), Firestore for data,
 Firebase email/password sign-in, and Google Calendar read-only. The first project is the Madrid field
 trial, migrated from the claude.ai artifact "מדריד: ניסוי שטח". The migration brief is
 `~/Projects app/BRIEF-FOR-CLAUDE-CODE.md`. See README.md for how to run, test, deploy.
