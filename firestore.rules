@@ -1,0 +1,36 @@
+// Firestore security rules: Projects app
+//
+// What this allows:
+//   - The owner, signed in with email/password, may read and write any document under
+//     /users/{their uid}. The project documents live at /users/{uid}/projects/{projectId}.
+//
+// What this blocks:
+//   - All unauthenticated access, reads and writes both.
+//   - Any other signed-in account, even inside its own /users/{uid} subtree. Sign-up is turned
+//     off in the console, so no other account should ever exist; pinning the owner's UID (same
+//     as madrid-jobs) keeps the data closed even if one does.
+//   - Every path outside /users.
+//
+// Unlike madrid-trip, this file is what's live: it's deployed with
+//   firebase deploy --only firestore:rules
+// and tested against the emulator first with tests/rules-test.py.
+
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /users/{userId}/{document=**} {
+      allow read, write: if request.auth != null
+                         && request.auth.uid == userId
+                         && request.auth.uid == 'o2PM1f3hqcPj9gQ9pgLXk8nLuCL2';
+    }
+
+    // Documentation only: Firestore already denies any path with no matching allow, and rules
+    // are a union across all matching blocks, so this can't take back access granted above.
+    // It states the "everything else is closed" intent for a reader.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,10 @@
+.DS_Store
+.firebase/
+node_modules/
+.env
+*-debug.log
+
+# One-time import sources. They hold the real project data and the repo is
+# public, so they only ever exist in a local checkout.
+data-export.json
+source-artifact.html
