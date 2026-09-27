@@ -1,6 +1,6 @@
 # Projects app
 
-**Version: v1.1**
+**Version: v1.2**
 
 A private project dashboard: static files on GitHub Pages (`https://matankashi.github.io/ProjectsDash/`,
 repo `git@github.com:Matankashi/ProjectsDash.git`, served from `main`), Firestore for data,
@@ -192,14 +192,15 @@ The madrid-trip budget app link was added to the real document's `trip` stream i
 the user approved, rehearsed on `madrid-field-trial-test` first (since deleted) and verified
 field by field afterwards.
 
-**v1.2: multiple projects and in-app editing (in progress).** Only the Madrid project for now; the
+**v1.2: multiple projects and in-app editing, released 2026-09-27.** Only the Madrid project for now; the
 model and screens take more without code changes. Stage 1 (built 2026-09-27): home with "היום", the
 overview panel and cards, the 3-active limit, `calendarKey`/`status`, the import removed, fake seed
 data, tests on `projects-test`. Stage 2 (built 2026-09-27): editing (goal, success criteria, milestone titles and
 dates, stream links, project status, calendar key with a count of matching blocks and a second tap
 at zero), and cards ordered by nearest deadline.
-Before deploying v1.2: back up the real document to `~/Documents/projects-app-backup/` (dated JSON),
-then add `project.calendarKey: "מדריד"` to it, with a before/after preview and the user's OK.
+Before the deploy, the real document was backed up to
+`~/Documents/projects-app-backup/madrid-field-trial-2026-09-27.json`, and `project.calendarKey: "מדריד"`
+was added to it in one approved, previewed write (only that field; verified field by field).
 
 **v1.3: week-grid task calendar inside the app.** A week grid showing only this project's calendar
 blocks, colored per stream. Done blocks faded with a check, missed blocks in red. Tapping a block
