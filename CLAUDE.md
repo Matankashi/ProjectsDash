@@ -1,6 +1,6 @@
 # Projects app
 
-**Version: v1.0**
+**Version: v1.1**
 
 A private project dashboard: static files on GitHub Pages (`https://matankashi.github.io/ProjectsDash/`,
 repo `git@github.com:Matankashi/ProjectsDash.git`, served from `main`), Firestore for data,
@@ -119,20 +119,27 @@ Repo conventions:
   timers are throttled. `tests/fake-google.js` answers without timers by default (`delayMs: 0`).
   Wait for states by polling with a MessageChannel yield, not fixed sleeps. Typing into the login
   form right after a reload was flaky; fill it through the DOM and call `requestSubmit()`.
+- Since 2026-09-27 `source-artifact.html` lives in `~/Documents/projects-app-backup/`, not in the repo
+  folder, so no local tab can rebuild a document from it. Emulator mode imports from it, so copy it
+  in only for an emulator session, and move it out again afterwards.
 - The fake's scenarios (`__fakeGoogle.scenario`) cover every calendar error path; see the top of
   `tests/fake-google.js`.
 
 ## Roadmap
 
-**v1.1 (links only):** a "פתח ביומן" link on every block in the 7-day list, a general Google
-Calendar link in the header, and data-driven per-stream links (see "Stream links"). After deploy,
-the user authorized one write to the real document: add the madrid-trip budget app link
-(`https://matankashi.github.io/madrid-trip/`) to the `trip` stream. Rehearse it on
-`madrid-field-trial-test` first, show the before/after of the `trip` stream, change only that
-stream's `links`, and confirm afterwards that nothing else in the document changed.
+**v1.1 (links only), released 2026-09-27:** a "פתח ביומן" link on every block in the 7-day list, a
+general Google Calendar link in the header, and data-driven per-stream links (see "Stream links").
+The madrid-trip budget app link was added to the real document's `trip` stream in a one-off write
+the user approved, rehearsed on `madrid-field-trial-test` first (since deleted) and verified
+field by field afterwards.
 
 **v1.2: multiple projects.** The user will add other life projects. A project switcher or an
-overview. Together with the multi-project editing UI: add/edit/remove for stream links.
+overview. Together with the multi-project editing UI: add/edit/remove for stream links. Also:
+import/rebuild only on the first load, never on a later missing-document snapshot. Today
+`onMissing` fires on every snapshot without the document, so any open localhost tab that can reach
+a seed file recreates a document seconds after it's deleted. That's how `madrid-field-trial-test`
+came back on 2026-09-25. And a separate fake seed file for emulator tests, so real data never has
+to be copied back into the repo folder.
 
 **v1.3: week-grid task calendar inside the app.** A week grid showing only this project's calendar
 blocks, colored per stream. Done blocks faded with a check, missed blocks in red. Tapping a block
