@@ -16,19 +16,20 @@ Live: https://matankashi.github.io/ProjectsDash/
 | `index.html` | The page shell |
 | `styles.css` | The artifact's CSS unchanged, plus the sign-in screen at the end |
 | `app.js` | The artifact's script: views, events, `toBlocks`, the timer. Data now comes from the two modules below |
-| `firebase.js` | Sign-in, the project document (live sync and debounced saves), the one-time import |
+| `firebase.js` | Sign-in, the project list, and each project document (live sync and debounced saves) |
 | `calendar.js` | Google Calendar, read-only: Google sign-in popup (GIS token client) and GET requests |
 | `firebase-config.js` | The public Firebase config |
 | `firestore.rules` | Security rules, deployed with the CLI |
 | `firebase.json`, `.firebaserc` | Firebase CLI settings: rules and emulators only, no Hosting |
-| `tests/` | Rules test, local test server, stand-in for Google (see "Testing") |
+| `tests/` | Rules test, local test server, stand-in for Google, made-up seed data (see "Testing") |
 
 ## Data
 
 One Firestore document per project at `users/{uid}/projects/{projectId}`. It holds the object the
 artifact kept in its `<script id="state">` tag (`version, project, rules, maxHeavy, streams,
 doneEvents, stuck, log`) plus `updatedAt`, set by the server. The Madrid project is
-`madrid-field-trial`.
+`madrid-field-trial`. Inside `project`, `calendarKey` is the word in an event's title that marks it
+as this project's block (Madrid: "מדריד"), and `status` is `active` or `paused` (at most 3 active).
 
 - Only what changed is saved, about a second after the last change (debounced). Marking a block
   done or undone writes just that block's entry and its log line, so two devices never overwrite
@@ -87,7 +88,8 @@ python3 tests/serve-test.py --emulator        # in a second terminal
 # open http://localhost:8010 and sign in as test@example.com / test-password
 ```
 
-Against the real project, but only ever on the test document `madrid-field-trial-test`:
+Against the real project, but only ever on the test collection `projects-test`, which the page
+fills with made-up projects from `tests/seed-fake.json` if it's empty (a write to the real project):
 
 ```bash
 python3 tests/serve-test.py                   # http://localhost:8010, red TEST bar at the top
@@ -100,14 +102,11 @@ firebase emulators:exec --only firestore --project demo-projects-app "python3 te
 firebase deploy --only firestore:rules         # only after the test passes
 ```
 
-## One-time import
+## No import
 
-The first time the owner signs in and the project document doesn't exist yet, the app creates it
-from `data-export.json` (the dashboard's "ייצוא נתונים" output) if that file is present, and
-otherwise from the state inside `source-artifact.html`. It never overwrites an existing document.
-Both files are gitignored, so the live site can't import: there, a missing document shows a message.
-To import, put the file in this folder, run `python3 -m http.server 8010 --bind 127.0.0.1`, open
-http://localhost:8010, and sign in once.
+The app never creates a project document; a deleted one stays deleted. The Madrid document was
+imported once from the claude.ai artifact on 2026-09-25, and that import code was removed in v1.2.
+Tests use made-up data from `tests/seed-fake.json` instead (see "Testing").
 
 ## Tools
 

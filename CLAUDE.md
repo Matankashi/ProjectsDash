@@ -37,7 +37,9 @@ Repo conventions:
 
 ## Data and sync (firebase.js)
 
-- One document per project, `users/{uid}/projects/{projectId}`. `PROJECT_ID` is in `app.js`.
+- One document per project, `users/{uid}/projects/{projectId}` (`PROJECTS` in `firebase.js`).
+  `watchProjects()` follows the list; `app.js` opens one `openProject()` per listed project and drops
+  a project whose document is deleted.
 - Saves write **only what changed** (`changesBetween()` against `base`, the last synced copy), as one
   batch, debounced 1 s: field paths per key for `doneEvents`/`stuck` (`deleteField()` on removal),
   `arrayUnion`/`arrayRemove` for `log`, the whole field for anything else (`streams`). Fields this
@@ -70,8 +72,37 @@ Repo conventions:
   devices editing streams within the same second lose one edit (seen in testing).
 - Rare edge of value-matched `log` entries: if one device unmarks a block while another marks it
   again on a different day, a log line can outlive its mark.
-- Import (`importIfMissing`) runs in a transaction and never overwrites. On the live site both seed
-  files are 404, so a missing document shows "אין עדיין נתונים לפרויקט הזה" and nothing is created.
+- There's no import (removed in v1.2): nothing in the app creates a project document, so a deleted
+  one stays deleted. An empty list shows "אין עדיין פרויקטים". The live Madrid document was imported
+  once, on 2026-09-25.
+- A document listener opened while *this tab* has a pending write to that document never delivers
+  it: `openProject()` skips pending snapshots, and the server's confirmation only changes metadata,
+  which doesn't fire a snapshot. The app never writes a document it hasn't loaded, so this only bites
+  test code that writes through the page's own Firestore instance (the seeder reloads for this reason).
+
+## Projects and the home screen (v1.2)
+
+- `app.js` keeps the artifact's views, which draw "the current project": `use(id)` points `state` and
+  `cal.blocks` at one project first. Every handler calls `useFor(el)`, which uses the project of the
+  nearest `[data-p]`. `commit()` saves the current project.
+- Routes: `#/` home, `#/p/<id>` one project. In-page links (`#week`, `#st-<stream>`) are caught in the
+  click handler and scroll instead of changing the hash.
+- Home: the app bar, then "היום" (today's blocks from all active projects, each with its ✓), then:
+  one active project → its overview panel and its full dashboard; two or more → an overview card per
+  active project linking to `#/p/<id>`. Paused projects sit in a collapsed "מוקפאים" row with "הפעל".
+  At most `MAX_ACTIVE` (3) active; activating a fourth shows a warning.
+- The overview panel (`overview()`) replaced the artifact's header: name, goal, countdown, overall
+  progress (milestones %) plus "השבוע: X מתוך Y בלוקים", next deadline, next block, missed-and-
+  unmarked count, and a row per stream (calendar-based %, green on track, red behind, grey without
+  blocks). The save status, "יומן Google" and sign-out moved to the app bar (`bar()`).
+- New optional fields inside `project`: `calendarKey` (the word in the event title that marks this
+  project's blocks, e.g. "מדריד" for "מדריד — סאבלט: ..."; no key means no blocks) and `status`
+  (`active`/`paused`, missing = active). `flight`, `buffer` and `decision` are optional: the countdown,
+  timeline and rules draw only what exists. Timeline ticks are computed (1st and 15th of each month
+  plus the end date), which gives Madrid the artifact's 1.10, 15.10, 1.11, 14.11.
+- Verified in stage 1: the Madrid dashboard sections (now, 7-day list, streams, deadlines, timeline,
+  log, rules) render identical HTML to v1.1 with the same data, apart from clock times and the new
+  `id="st-<stream>"` anchors.
 
 ## Stream links (v1.1)
 
@@ -95,8 +126,9 @@ Repo conventions:
   or a token without the scope; `accessNotConfigured` gets its own message), network (fetch
   failure, 5xx, 429, rate-limit 403s). Data on screen is kept for everything except a fresh start.
 - After a denial, the next connect asks with `prompt: 'consent'`.
-- The window comes from the project dates (`calRange()` in `app.js`). Blocks before
-  "earliest date − 10 days" aren't fetched.
+- The window comes from the active projects' dates (`calRange()` in `app.js`), one request for all
+  of them: each project's earliest date − 10 days through its decision date (or latest date) + 2 days,
+  and always reaching a week past today. Paused projects' blocks aren't fetched.
 
 ## Security
 
@@ -107,11 +139,19 @@ Repo conventions:
 
 ## Testing gotchas
 
-- Never test against `madrid-field-trial`. `tests/serve-test.py` rewrites `app.js` on the fly to use
-  `madrid-field-trial-test`, sends `no-store`, and binds to 127.0.0.1 only.
-- `serve-test.py` depends on exact strings: `const PROJECT_ID=...` and `const LS_TIMER=...` in
-  `app.js`; `<body>`/`</head>` in `index.html`; and in `--emulator` mode the two SDK import lines
-  and `const db = getFirestore(app);` in `firebase.js`. It returns HTTP 500 if one is missing.
+- Never test against the real `projects` collection. `tests/serve-test.py` rewrites `firebase.js` on
+  the fly to use `users/{uid}/projects-test`, sends `no-store`, and binds to 127.0.0.1 only.
+- It also adds `tests/seed-in-page.js`: once signed in, if `projects-test` is empty, it fills it with
+  the made-up projects in `tests/seed-fake.json` (3 active, 1 paused, calendar keys מדריד/קפה/כושר/גינה
+  matching `tests/fake-google.js`) and reloads. Without `--emulator` that's a write to the real Firebase
+  project, under `projects-test` only, so it needs the user's OK like any other write.
+- `serve-test.py` depends on exact strings: `const LS_TIMER=...` in `app.js`; `<body>`/`</head>` in
+  `index.html`; `const PROJECTS = 'projects';` in `firebase.js`; and in `--emulator` mode the two SDK
+  import lines and `const db = getFirestore(app);` in `firebase.js`. It returns HTTP 500 if one is
+  missing.
+- To change test data the way another device would, write from outside the page: the emulator's REST
+  API with `Authorization: Bearer owner` (emulator only; it bypasses rules). Writes through the page's
+  own Firestore instance don't reach the app's listeners (see "Data and sync").
 - Emulator mode needs the emulators running first. It creates `test@example.com` / `test-password`
   with the UID from `firestore.rules`. After changing that UID, restart the emulators (they start
   empty) and the server.
@@ -119,9 +159,8 @@ Repo conventions:
   timers are throttled. `tests/fake-google.js` answers without timers by default (`delayMs: 0`).
   Wait for states by polling with a MessageChannel yield, not fixed sleeps. Typing into the login
   form right after a reload was flaky; fill it through the DOM and call `requestSubmit()`.
-- Since 2026-09-27 `source-artifact.html` lives in `~/Documents/projects-app-backup/`, not in the repo
-  folder, so no local tab can rebuild a document from it. Emulator mode imports from it, so copy it
-  in only for an emulator session, and move it out again afterwards.
+- `source-artifact.html` lives in `~/Documents/projects-app-backup/` since 2026-09-27 and is no longer
+  needed for anything: tests use `tests/seed-fake.json`.
 - The fake's scenarios (`__fakeGoogle.scenario`) cover every calendar error path; see the top of
   `tests/fake-google.js`.
 
@@ -133,13 +172,13 @@ The madrid-trip budget app link was added to the real document's `trip` stream i
 the user approved, rehearsed on `madrid-field-trial-test` first (since deleted) and verified
 field by field afterwards.
 
-**v1.2: multiple projects.** The user will add other life projects. A project switcher or an
-overview. Together with the multi-project editing UI: add/edit/remove for stream links. Also:
-import/rebuild only on the first load, never on a later missing-document snapshot. Today
-`onMissing` fires on every snapshot without the document, so any open localhost tab that can reach
-a seed file recreates a document seconds after it's deleted. That's how `madrid-field-trial-test`
-came back on 2026-09-25. And a separate fake seed file for emulator tests, so real data never has
-to be copied back into the repo folder.
+**v1.2: multiple projects and in-app editing (in progress).** Only the Madrid project for now; the
+model and screens take more without code changes. Stage 1 (built 2026-09-27): home with "היום", the
+overview panel and cards, the 3-active limit, `calendarKey`/`status`, the import removed, fake seed
+data, tests on `projects-test`. Stage 2: editing (goal, success criteria, milestone titles and dates,
+stream links, project status, calendar key with a count of matching blocks and a warning at zero).
+Before deploying v1.2: back up the real document to `~/Documents/projects-app-backup/` (dated JSON),
+then add `project.calendarKey: "מדריד"` to it, with a before/after preview and the user's OK.
 
 **v1.3: week-grid task calendar inside the app.** A week grid showing only this project's calendar
 blocks, colored per stream. Done blocks faded with a check, missed blocks in red. Tapping a block

@@ -1,25 +1,32 @@
 /* Projects app: the dashboard.
    Views, events, toBlocks and the timer are the claude.ai artifact's code. What changed is where the
-   data lives: the project state is a Firestore document (firebase.js) instead of JSON inside the page,
-   and the calendar is read from Google Calendar directly (calendar.js) instead of through claude.ai. */
-import {watchAuth,signIn,signOutUser,openProject,loadSeed,importIfMissing} from './firebase.js';
+   data lives: each project is a Firestore document (firebase.js) instead of JSON inside the page,
+   and the calendar is read from Google Calendar directly (calendar.js) instead of through claude.ai.
+   Since v1.2 there can be several projects. The artifact's views draw "the current project": use(id)
+   points `state` and cal.blocks at one project before its views run, and every event handler first
+   calls use() for the project its element belongs to (the nearest [data-p]). */
+import {watchAuth,signIn,signOutUser,watchProjects,openProject} from './firebase.js';
 import * as gcal from './calendar.js';
 
-const PROJECT_ID='madrid-field-trial';
 const LS_TIMER='madrid-dash-timer';
-/* The calendar window comes from the project's own dates: CAL_LEAD_DAYS before the earliest one,
-   through CAL_TRAIL_DAYS after decision.date. For the Madrid project that is exactly the artifact's
-   old fixed window, 2026-09-20 to 2026-11-16. */
+/* The calendar window comes from each active project's own dates: CAL_LEAD_DAYS before the earliest
+   one, through CAL_TRAIL_DAYS after decision.date (or the latest date if there's no decision), and
+   always reaching at least a week past today. All active projects share one request. For the Madrid
+   project that is exactly the artifact's old fixed window, 2026-09-20 to 2026-11-16. */
 const CAL_LEAD_DAYS=10,CAL_TRAIL_DAYS=2;
+const MAX_ACTIVE=3;          // active projects at once; the rest are paused
 const STATUS={active:'פעיל',waiting:'ממתין',habit:'הרגל',stuck:'תקוע',done:'הושלם'};
 const DAYS=['א׳','ב׳','ג׳','ד׳','ה׳','ו׳','ש׳'];
 const app=document.getElementById('app');
 
-let state=null;              // the project document from Firestore; null until it arrives
-let view='auth',viewMsg='';  // what render() shows while state is null
-let sync=null;
+const projects={};           // id -> {id, state, sync}; state is null until its first snapshot
+let listed=null;             // project ids in the list, null until the list arrives
+let state=null;              // the current project's state (see use())
+let cur=null;                // the current project's id
+let route={name:'home'};     // #/ is home, #/p/<id> is one project
+let view='auth',viewMsg='';  // what render() shows until every listed project has arrived
 
-let ui={open:{},stuck:false,warn:null,showLog:false,exp:false};
+let ui={open:{},stuck:false,warn:null,showLog:false,exp:false,warnP:null};
 
 let saveText='';
 
@@ -56,22 +63,34 @@ const CAL_MSG={
   gis_failed:'לא הצלחתי לטעון את ההתחברות של Google. בדוק את החיבור ונסה שוב.'
 };
 const CAL_TITLE={disconnected:'היומן לא מחובר',expired:'החיבור ליומן פג',denied:'אין הרשאה לקרוא את היומן',network:'היומן לא זמין כרגע'};
-let cal={status:'disconnected',blocks:[],msg:CAL_MSG.disconnected,storedAt:0};
+let cal={status:'disconnected',items:[],blocks:[],msg:CAL_MSG.disconnected,storedAt:0};  // items: every event fetched; blocks: the current project's
 let calBusy=false;
+/* A project's blocks are the events whose title contains its calendarKey ("מדריד — סאבלט: ...");
+   the key and the dash after it are dropped from the title. No key, no blocks. */
+const reEsc=s=>s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
 function toBlocks(payload){
-  const p=payload;
+  const p=payload,key=String(state.project.calendarKey||'').trim();
   const evs=(p&&Array.isArray(p.items))?p.items:[];
-  return evs.filter(e=>e&&e.status!=='cancelled'&&e.start&&e.start.dateTime&&e.end&&/מדריד/.test(e.summary||'')).map(e=>{
+  if(!key)return [];
+  const strip=new RegExp('^.*?'+reEsc(key)+'\\s*[—–:\\-]\\s*');
+  return evs.filter(e=>e&&e.status!=='cancelled'&&e.start&&e.start.dateTime&&e.end&&(e.summary||'').includes(key)).map(e=>{
     const sum=e.summary||'';
-    const title=sum.replace(/^.*?מדריד\s*[—–:\-]\s*/,'').trim()||sum;
+    const title=sum.replace(strip,'').trim()||sum;
     const streams=state.streams.filter(s=>(s.match||[]).some(k=>sum.toLowerCase().includes(k.toLowerCase()))).map(s=>s.id);
     return {id:e.id,title,desc:stripHtml(e.description),start:new Date(e.start.dateTime),end:new Date(e.end.dateTime),link:e.htmlLink||'',streams};
   }).sort((a,b)=>a.start-b.start);
 }
-function calRange(){
-  const P=state.project,dates=[P.flight,P.buffer&&P.buffer.from,P.buffer&&P.buffer.to,P.decision.date];
+function projectRange(){
+  const P=state.project,dates=[P.flight,P.buffer&&P.buffer.from,P.buffer&&P.buffer.to,P.decision&&P.decision.date];
   state.streams.forEach(s=>s.milestones.forEach(m=>dates.push(m.date)));
-  const from=parse(dates.filter(Boolean).sort()[0]),to=parse(P.decision.date);
+  const ds=dates.filter(Boolean).sort();
+  return {from:ds.length?parse(ds[0]):today(),to:parse((P.decision&&P.decision.date)||ds[ds.length-1]||iso(today()))};
+}
+function calRange(){
+  const t=today(),wk=today();wk.setDate(wk.getDate()+7);
+  let from=null,to=wk;
+  const keep=cur;activeIds().forEach(id=>{use(id);const r=projectRange();if(!from||r.from<from)from=r.from;if(r.to>to)to=r.to;});if(keep&&projects[keep])use(keep);
+  from=new Date(from||t);to=new Date(to);
   from.setDate(from.getDate()-CAL_LEAD_DAYS);to.setDate(to.getDate()+CAL_TRAIL_DAYS);
   return {timeMin:from.toISOString(),timeMax:to.toISOString()};
 }
@@ -95,8 +114,8 @@ async function refreshCalendar(){
   const t=gcal.tokenState();
   if(t!=='valid'){calFail({kind:t==='expired'?'expired':'disconnected'});return;}
   calBusy=true;
-  if(!cal.blocks.length){cal=Object.assign({},cal,{status:'loading'});render();}
-  try{const items=await gcal.listEvents(calRange());cal={status:'ok',blocks:toBlocks({items}),msg:'',storedAt:Date.now()};render();}
+  if(!cal.items.length){cal=Object.assign({},cal,{status:'loading'});render();}
+  try{const items=await gcal.listEvents(calRange());cal={status:'ok',items,blocks:[],msg:'',storedAt:Date.now()};render();}
   catch(err){console.error('projects-app: calendar refresh failed',err);calFail(err);}
   finally{calBusy=false;}
 }
@@ -109,14 +128,25 @@ const isDone=b=>!!state.doneEvents[b.id];
 const blocksOf=id=>cal.blocks.filter(b=>b.streams.includes(id));
 const missedBlocks=()=>{const n=Date.now();return cal.blocks.filter(b=>b.end<=n&&!isDone(b));};
 
+/* projects */
+function use(id){const p=projects[id];cur=id;state=p.state;cal.blocks=state?toBlocks({items:cal.items}):[];}
+const loadedIds=()=>(listed||[]).filter(id=>projects[id]&&projects[id].state);
+const isPaused=id=>projects[id].state.project.status==='paused';
+const activeIds=()=>loadedIds().filter(id=>!isPaused(id));
+const pausedIds=()=>loadedIds().filter(isPaused);
+
 /* saving: firebase.js debounces and writes only what changed */
 const SAVE_TEXT={saving:'שומר…',saved:'נשמר בענן',offline:'אין חיבור. יישמר כשהרשת תחזור'};
-function commit(){render();sync.save(state);}
+function commit(){const p=projects[cur];render();p.sync.save(p.state);}
 function onSaveState(s,err){setStatus(s==='error'?'לא נשמר: '+((err&&err.code)||'שגיאה'):s==='saving'&&!navigator.onLine?SAVE_TEXT.offline:SAVE_TEXT[s]);}
+// One status line for all projects: an error wins, then "saving", then "saved".
+const saveStates={};
+const saveStateOf=id=>(s,err)=>{saveStates[id]={s,err};const all=Object.values(saveStates);const x=all.find(v=>v.s==='error')||all.find(v=>v.s==='saving')||{s:'saved'};onSaveState(x.s,x.err);};
+const eachSync=f=>Object.values(projects).forEach(p=>{if(p.sync)f(p.sync);});
 window.addEventListener('offline',()=>{if(saveText===SAVE_TEXT.saving)setStatus(SAVE_TEXT.offline);});
 window.addEventListener('online',()=>{if(saveText===SAVE_TEXT.offline)setStatus(SAVE_TEXT.saving);});
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'&&sync)sync.flush();});
-window.addEventListener('pagehide',()=>{if(sync)sync.flush();});
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')eachSync(s=>s.flush());});
+window.addEventListener('pagehide',()=>eachSync(s=>s.flush()));
 
 /* timer */
 const getTimer=()=>{try{return JSON.parse(localStorage.getItem(LS_TIMER)||'null');}catch(e){return null;}};
@@ -137,15 +167,82 @@ function setDone(id,on){
 }
 
 /* views */
-function header(){
-  const P=state.project,f=daysUntil(P.flight);
-  const c=f>0?`<span class="count-n">${f}</span><span>ימים לטיסה (${fmt(P.flight)})</span>`:f===0?'<span class="count-n">היום</span><span>טסים</span>':`<span class="count-n">${daysUntil(P.decision.date)}</span><span>ימים לנקודת ההחלטה</span>`;
-  return `<header class="top"><div class="top-row"><h1>${esc(P.name)}</h1><span class="top-tools"><span id="save" class="save">${esc(saveText)}</span><a class="b-link out" href="https://calendar.google.com/calendar/r" target="_blank" rel="noopener">יומן Google</a><button class="b-link out" data-act="signout">התנתקות</button></span></div><p class="goal">${esc(P.goal)}</p><div class="count">${c}</div></header>`;
+/* The app bar: save status and the tools that used to sit in the project header. */
+function bar(back){
+  return `<div class="bar">${back?'<a class="b-link bar-back" href="#/">כל הפרויקטים</a>':'<span></span>'}<span class="top-tools"><span id="save" class="save">${esc(saveText)}</span><a class="b-link out" href="https://calendar.google.com/calendar/r" target="_blank" rel="noopener">יומן Google</a><button class="b-link out" data-act="signout">התנתקות</button></span></div>`;
+}
+/* The artifact header's countdown: days to the flight, then to the decision. Only for dates the project has. */
+function countdown(P){
+  const f=P.flight?daysUntil(P.flight):null;
+  if(f!==null&&f>0)return `<span class="count-n">${f}</span><span>ימים לטיסה (${fmt(P.flight)})</span>`;
+  if(f===0)return '<span class="count-n">היום</span><span>טסים</span>';
+  if(P.decision&&P.decision.date)return `<span class="count-n">${daysUntil(P.decision.date)}</span><span>ימים לנקודת ההחלטה</span>`;
+  return '';
+}
+/* A stream at a glance: the calendar-based numbers of progress(), or milestones when it has no blocks. */
+function streamPace(s){
+  const n=Date.now(),bl=blocksOf(s.id);
+  if(bl.length){const done=bl.filter(isDone).length,behind=bl.filter(b=>b.end<=n&&!isDone(b)).length;return {pct:Math.round(done/bl.length*100),cls:behind>0?'behind':'ontrack',note:behind>0?(behind===1?'בלוק אחד מאחור':behind+' בלוקים מאחור'):'בזמן'};}
+  const mt=s.milestones.length;if(!mt)return {pct:0,cls:'none',note:'אין בלוקים ביומן'};
+  return {pct:Math.round(s.milestones.filter(m=>m.done).length/mt*100),cls:'none',note:'אין בלוקים ביומן'};
+}
+/* The project overview: the page's top panel, or a card on the home screen when card is true.
+   A card is one link to the project, so nothing inside it is interactive. */
+function overview(card){
+  const P=state.project,n=Date.now(),id=esc(cur);
+  const ms=state.streams.flatMap(s=>s.milestones),md=ms.filter(m=>m.done).length;
+  const pct=ms.length?Math.round(md/ms.length*100):0;
+  const ws=weekStart(),we=new Date(ws);we.setDate(we.getDate()+7);
+  const wb=cal.blocks.filter(b=>b.start>=ws&&b.start<we);
+  const week=cal.items.length||cal.status==='ok'?`<p class="ov-week">השבוע: ${wb.filter(isDone).length} מתוך ${wb.length} בלוקים</p>`:'';
+  const dl=allOpen()[0];
+  const nb=cal.blocks.find(b=>b.end>n&&!isDone(b));
+  const missed=missedBlocks().length;
+  const c=countdown(P);
+  const tile=(lbl,val)=>`<div class="ov-tile"><span class="ov-lbl">${lbl}</span>${val}</div>`;
+  const tiles=[
+    tile('התקדמות',`<div class="prog" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="אבני דרך שהושלמו"><div class="prog-bar"><div class="prog-fill" style="width:${pct}%"></div></div><span class="prog-n">${pct}%</span></div><p class="ov-sub">אבני דרך: ${md} מתוך ${ms.length}</p>${week}`),
+    tile('הדד־ליין הבא',dl?`<span class="ov-val">${esc(dl.m.title)}</span><p class="ov-sub"><span class="chip ${urg(daysUntil(dl.m.date))}">${rel(daysUntil(dl.m.date))}</span> ${fmt(dl.m.date)}</p>`:'<span class="ov-val muted">אין דד־ליינים פתוחים</span>'),
+    tile('הבלוק הבא',nb?`<span class="ov-val">${esc(nb.title)}</span><p class="ov-sub">${esc(nb.start<=n?'עכשיו, עד '+hm(nb.end):whenLabel(nb))}</p>`:`<span class="ov-val muted">${cal.items.length?'אין בלוקים עתידיים':'היומן לא נטען'}</span>`),
+    tile('לא סומנו',`<span class="ov-val${missed?' ov-red':''}">${missed?(missed===1?'בלוק אחד עבר ולא סומן':missed+' בלוקים עברו ולא סומנו'):'הכול מסומן'}</span>${missed&&!card?'<p class="ov-sub"><a href="#week">לסמן מה בוצע</a></p>':''}`)
+  ].join('');
+  const rows=state.streams.map(s=>{const p=streamPace(s);const inner=`<span class="ovs-n">${esc(s.name)}</span><span class="ovs-bar"><span class="ovs-fill ${p.cls}" style="width:${p.pct}%"></span></span><span class="ovs-p ${p.cls}">${p.pct}%</span>`;
+    return card?`<li class="ovs" title="${esc(p.note)}">${inner}</li>`:`<li><a class="ovs" href="#st-${esc(s.id)}" title="${esc(p.note)}" aria-label="${esc(s.name)}: ${p.pct}%, ${esc(p.note)}">${inner}</a></li>`;}).join('');
+  const head=`<div class="ov-head">${card?`<h2>${esc(P.name)}</h2>`:`<h1>${esc(P.name)}</h1>`}${P.status==='paused'?'<span class="chip calm">מוקפא</span>':''}</div>${P.goal?`<p class="goal">${esc(P.goal)}</p>`:''}${c?`<div class="count">${c}</div>`:''}`;
+  const body=`${head}<div class="ov-grid">${tiles}</div>${rows?`<ul class="ov-streams" aria-label="המסלולים">${rows}</ul>`:''}`;
+  return card?`<a class="ov card" href="#/p/${encodeURIComponent(cur)}" data-p="${id}">${body}</a>`:`<header class="ov top">${body}</header>`;
+}
+/* Today's blocks from every active project, each with its done toggle. */
+function todayView(){
+  const act=activeIds(),n=Date.now(),t0=today(),t1=today();t1.setDate(t1.getDate()+1);
+  const items=[];act.forEach(id=>{use(id);cal.blocks.filter(b=>b.start>=t0&&b.start<t1).forEach(b=>items.push({id,b,done:isDone(b),proj:state.project.name}));});
+  items.sort((x,y)=>x.b.start-y.b.start);
+  const multi=act.length>1;
+  const list=items.map(({id,b,done,proj})=>{const missed=!done&&b.end<=n;
+    return `<li class="${done?'done':''}${missed?' missed':''}" data-p="${esc(id)}"><label><input type="checkbox" data-act="ev-toggle" data-e="${esc(b.id)}"${done?' checked':''}><span class="wk-time">${hm(b.start)}</span><span class="wk-t">${esc(b.title)}</span></label>${multi?`<span class="wk-s">${esc(proj)}</span>`:''}${b.link?`<a class="wk-cal" href="${esc(b.link)}" target="_blank" rel="noopener">פתח ביומן</a>`:''}${missed?'<span class="chip red">עבר ולא סומן</span>':''}</li>`;}).join('');
+  const empty=cal.status==='loading'?'טוען את הלו״ז מהיומן…':cal.items.length||cal.status==='ok'?'אין בלוקים היום.':(CAL_TITLE[cal.status]||'')+'. '+(cal.msg||'');
+  return `<section class="sec today-strip" aria-labelledby="today-h"><div class="sec-head"><h2 id="today-h">היום</h2>${cal.status==='ok'?'':calButton('b-link')}</div>
+  <div class="wk">${items.length?`<div class="wk-day"><ul>${list}</ul></div>`:`<p class="muted">${esc(empty)}</p>`}</div></section>`;
+}
+function pausedView(){
+  const ids=pausedIds();if(!ids.length)return '';
+  return `<details class="paused sec"${ui.warnP?' open':''}><summary>מוקפאים (${ids.length})</summary>${ui.warnP?`<p class="warn" role="alert">${esc(ui.warnP)}</p>`:''}<ul>${ids.map(id=>{const P=projects[id].state.project;
+    return `<li data-p="${esc(id)}"><a href="#/p/${encodeURIComponent(id)}">${esc(P.name)}</a>${P.goal?`<span class="muted">${esc(P.goal)}</span>`:''}<button class="b-sec" data-act="activate">הפעל</button></li>`;}).join('')}</ul></details>`;
+}
+/* One project's full page: the overview panel, then the artifact's dashboard. */
+function projectPage(extra){return `<div data-p="${esc(cur)}">${overview(false)}${extra||''}${nowView()}${weekView()}${streams()}${upcoming()}${timeline()}${logView()}${rulesView()}</div>`;}
+/* Home: today across projects, then the one active project's full page, or a card per active project. */
+function homeView(){
+  const act=activeIds();
+  let h=bar(false)+todayView();
+  if(act.length===1){use(act[0]);h+=projectPage(pausedView());}
+  else{h+=act.length?`<section class="cards sec" aria-label="פרויקטים פעילים">${act.map(id=>{use(id);return overview(true);}).join('')}</section>`:'<p class="muted sec">אין פרויקטים פעילים.</p>';h+=pausedView();}
+  return h;
 }
 const names=b=>b.streams.map(id=>(S(id)||{}).name).filter(Boolean).join(' + ');
 function nowView(){
   if(cal.status==='loading')return `<section class="now"><div class="now-head"><span class="now-tag">הבלוק הבא</span></div><h2 class="now-title">טוען את הלו״ז מהיומן…</h2></section>`;
-  if(!cal.blocks.length)return `<section class="now"><div class="now-head"><span class="now-tag">הבלוק הבא</span></div><h2 class="now-title">${cal.status==='ok'?'אין בלוקים של מדריד ביומן':CAL_TITLE[cal.status]}</h2><p class="now-meta">${esc(cal.msg||'')}</p><div class="now-actions">${calButton('b-light')}</div></section>`;
+  if(!cal.blocks.length)return `<section class="now"><div class="now-head"><span class="now-tag">הבלוק הבא</span></div><h2 class="now-title">${cal.status==='ok'?`אין בלוקים של ${esc(state.project.calendarKey||state.project.name)} ביומן`:CAL_TITLE[cal.status]}</h2><p class="now-meta">${esc(cal.msg||'')}</p><div class="now-actions">${calButton('b-light')}</div></section>`;
   const n=Date.now();
   const b=cal.blocks.find(x=>x.start<=n&&x.end>n&&!isDone(x))||cal.blocks.find(x=>x.start>n&&!isDone(x));
   const missed=missedBlocks();
@@ -188,21 +285,26 @@ function upcoming(){
 function timeline(){
   const P=state.project,dated=[];
   state.streams.forEach(s=>s.milestones.forEach(m=>{if(m.date)dated.push(m);}));
+  const endDate=(P.decision&&P.decision.date)||dated.map(m=>m.date).sort().pop();
+  if(!endDate)return '';
   let start=today();dated.forEach(m=>{if(parse(m.date)<start)start=parse(m.date);});
-  const end=parse(P.decision.date);const total=Math.max(end-start,86400000);
+  const end=parse(endDate);const total=Math.max(end-start,86400000);
   const pos=d=>Math.min(100,Math.max(0,(parse(d)-start)/total*100));
   const groups={};dated.forEach(m=>{(groups[m.date]=groups[m.date]||[]).push(m);});
   const dots=Object.keys(groups).map(d=>{const g=groups[d],open=g.filter(m=>!m.done);const cls=open.length?urg(daysUntil(d)):'done';
     const tip=fmt(d)+': '+g.map(m=>m.title+(m.done?' (בוצע)':'')).join(', ');
     return `<span class="tl-dot ${cls}" style="inset-inline-start:${pos(d)}%" title="${esc(tip)}" role="img" aria-label="${esc(tip)}">${g.length>1?g.length:''}</span>`;}).join('');
-  const ticks=['2026-10-01','2026-10-15','2026-11-01','2026-11-14'].filter(d=>parse(d)>=start&&parse(d)<=end).map(d=>`<span class="tl-tick" style="inset-inline-start:${pos(d)}%">${fmt(d)}</span>`).join('');
+  // Ticks on the 1st and 15th of each month, plus the end date (for Madrid: the artifact's 1.10, 15.10, 1.11, 14.11).
+  const tickDates=[];for(let d=new Date(start.getFullYear(),start.getMonth(),1);d<=end;d.setMonth(d.getMonth()+1)){tickDates.push(iso(d));tickDates.push(iso(new Date(d.getFullYear(),d.getMonth(),15)));}
+  tickDates.push(endDate);
+  const ticks=[...new Set(tickDates)].sort().filter(d=>parse(d)>=start&&parse(d)<=end).map(d=>`<span class="tl-tick" style="inset-inline-start:${pos(d)}%">${fmt(d)}</span>`).join('');
   const tp=Math.min(100,Math.max(0,(today()-start)/total*100));
   return `<section class="sec"><h2>ציר הזמן</h2><div class="tl-scroll"><div class="tl">
   <div class="tl-axis"></div>
-  <div class="tl-band" style="inset-inline-start:${pos(P.buffer.from)}%;width:${pos(P.buffer.to)-pos(P.buffer.from)+1}%" title="באפר: מסירה ואריזה בלבד"></div>
+  ${P.buffer?`<div class="tl-band" style="inset-inline-start:${pos(P.buffer.from)}%;width:${pos(P.buffer.to)-pos(P.buffer.from)+1}%" title="באפר: מסירה ואריזה בלבד"></div>`:''}
   <div class="tl-mark today" style="inset-inline-start:${tp}%"><span>היום</span></div>
-  <div class="tl-mark flight" style="inset-inline-start:${pos(P.flight)}%"><span>טיסה</span></div>
-  <div class="tl-mark decide" style="inset-inline-start:100%"><span>החלטה</span></div>
+  ${P.flight?`<div class="tl-mark flight" style="inset-inline-start:${pos(P.flight)}%"><span>טיסה</span></div>`:''}
+  ${P.decision?'<div class="tl-mark decide" style="inset-inline-start:100%"><span>החלטה</span></div>':''}
   ${dots}${ticks}</div></div></section>`;
 }
 function progress(s){
@@ -247,7 +349,7 @@ function streamView(s){
     return `<li class="${m.done?'done':''}"><label><input type="checkbox" data-act="ms-toggle" data-s="${s.id}" data-m="${m.id}"${m.done?' checked':''}><span class="ms-t">${esc(m.title)}</span></label>${m.date?(m.done?`<span class="ms-d">${fmt(m.date)}</span>`:`<span class="ms-d">${fmt(m.date)}</span><span class="chip ${urg(d)}">${rel(d)}</span>`):''}${open?`<button class="x" data-act="ms-del" data-s="${s.id}" data-m="${m.id}" aria-label="מחק">×</button>`:''}</li>`;}).join('')}</ul>`:'';
   const moreBtn=(ms.length>shown.length||open)?`<button class="b-link more" data-act="more" data-s="${s.id}">${open?'פחות':`כל אבני הדרך (${ms.length})`}</button>`:(!ms.length&&!s.habit?`<button class="b-link more" data-act="more" data-s="${s.id}">הוסף אבן דרך</button>`:'');
   const add=open?`<form class="form" data-form="add-ms" data-s="${s.id}"><input name="title" required placeholder="אבן דרך חדשה"><input name="date" type="date" aria-label="תאריך"><button class="b-sec">הוסף</button></form>`:'';
-  return `<article class="st st-${s.status}">
+  return `<article class="st st-${s.status}" id="st-${esc(s.id)}">
   <div class="st-head"><h3>${esc(s.name)}</h3><div class="st-tools">
     <select class="st-status" data-act="status" data-s="${s.id}" aria-label="סטטוס">${Object.keys(STATUS).map(k=>`<option value="${k}"${k===s.status?' selected':''}>${STATUS[k]}</option>`).join('')}</select>
     ${s.habit?'':`<button class="tog" data-act="heavy" data-s="${s.id}" aria-pressed="${!!s.heavy}">מוקד כבד</button>`}
@@ -265,8 +367,8 @@ function logView(){
 }
 function rulesView(){
   const P=state.project;
-  return `<section class="sec rules"><h2>הכללים</h2><ul>${state.rules.map(r=>`<li>${esc(r)}</li>`).join('')}<li>${fmt(P.decision.date)}: נקודת החלטה. ${esc(P.decision.question)}</li></ul>
-  <h3>הצלחה עד הטיסה</h3><ul>${P.success.map(r=>`<li>${esc(r)}</li>`).join('')}</ul>
+  return `<section class="sec rules"><h2>הכללים</h2><ul>${(state.rules||[]).map(r=>`<li>${esc(r)}</li>`).join('')}${P.decision?`<li>${fmt(P.decision.date)}: נקודת החלטה. ${esc(P.decision.question)}</li>`:''}</ul>
+  ${(P.success||[]).length?`<h3>הצלחה עד הטיסה</h3><ul>${P.success.map(r=>`<li>${esc(r)}</li>`).join('')}</ul>`:''}
   <button class="b-sec" data-act="export">${ui.exp?'הסתר נתונים':'ייצוא נתונים (JSON)'}</button>${ui.exp?`<textarea class="export" readonly aria-label="נתוני הדשבורד">${esc(JSON.stringify(state,null,2))}</textarea>`:''}</section>`;
 }
 function loginView(){
@@ -278,16 +380,30 @@ function loginView(){
     <button class="b-primary" id="login-btn">כניסה</button>
   </form></main>`;
 }
-const BOOT={auth:'טוען…',loading:'טוען את הנתונים…',importing:'יוצר את הפרויקט מהנתונים הקיימים…',offline:'אין חיבור לשרת. מנסה שוב…',nodata:'אין עדיין נתונים לפרויקט הזה',error:'לא הצלחתי לטעון את הנתונים'};
+const BOOT={auth:'טוען…',loading:'טוען את הנתונים…',offline:'אין חיבור לשרת. מנסה שוב…',empty:'אין עדיין פרויקטים',error:'לא הצלחתי לטעון את הנתונים'};
 function bootView(){
-  return `<section class="sec boot" aria-live="polite"><h2>${BOOT[view]}</h2>${viewMsg?`<p class="muted">${esc(viewMsg)}</p>`:''}${view==='nodata'||view==='error'?'<button class="b-link out" data-act="signout">התנתקות</button>':''}</section>`;
+  return `<section class="sec boot" aria-live="polite"><h2>${BOOT[view]}</h2>${viewMsg?`<p class="muted">${esc(viewMsg)}</p>`:''}${view==='empty'||view==='error'?'<button class="b-link out" data-act="signout">התנתקות</button>':''}</section>`;
 }
-function render(){if(!state){app.innerHTML=view==='login'?loginView():bootView();return;}app.innerHTML=header()+nowView()+weekView()+streams()+upcoming()+timeline()+logView()+rulesView();tick();}
+const ready=()=>listed!==null&&listed.length>0&&view!=='error'&&listed.every(id=>projects[id]&&projects[id].state);
+function readRoute(){const m=location.hash.match(/^#\/p\/([^/]+)$/);route=m?{name:'project',id:decodeURIComponent(m[1])}:{name:'home'};}
+function render(){
+  if(!ready()){app.innerHTML=view==='login'?loginView():bootView();return;}
+  const p=route.name==='project'&&projects[route.id];
+  if(p){use(route.id);app.innerHTML=bar(true)+projectPage();}
+  else app.innerHTML=homeView();
+  tick();
+}
 
 /* events */
+// Before any handler: act on the project the element belongs to.
+function useFor(el){const h=el.closest('[data-p]');if(h&&projects[h.dataset.p]&&projects[h.dataset.p].state)use(h.dataset.p);}
 app.addEventListener('click',e=>{
+  // In-page links (#week, #st-<stream>) scroll; only #/... changes the route.
+  const link=e.target.closest('a[href^="#"]');
+  if(link&&!link.getAttribute('href').startsWith('#/')){e.preventDefault();const el=document.getElementById(link.getAttribute('href').slice(1));if(el)el.scrollIntoView({behavior:'smooth',block:'start'});return;}
   const b=e.target.closest('[data-act]');if(!b||b.tagName==='SELECT'||b.type==='checkbox')return;
   if(b.dataset.act==='signout'){signOut();return;}
+  useFor(b);
   const a=b.dataset.act,s=S(b.dataset.s),id=b.dataset.e;
   const m=s&&b.dataset.m?s.milestones.find(x=>x.id===b.dataset.m):null;
   switch(a){
@@ -304,10 +420,11 @@ app.addEventListener('click',e=>{
     case 'more':ui.open[s.id]=!ui.open[s.id];render();break;
     case 'log':ui.showLog=!ui.showLog;render();break;
     case 'export':ui.exp=!ui.exp;render();break;
+    case 'activate':if(activeIds().length>=MAX_ACTIVE){ui.warnP=`כבר יש ${MAX_ACTIVE} פרויקטים פעילים. תקפיא אחד לפני שמפעילים עוד.`;render();}else{state.project.status='active';ui.warnP=null;commit();if(gcal.tokenState()==='valid')refreshCalendar();}break;
   }
 });
 app.addEventListener('change',e=>{
-  const t=e.target,a=t.dataset.act;if(!a)return;const s=S(t.dataset.s);
+  const t=e.target,a=t.dataset.act;if(!a)return;useFor(t);const s=S(t.dataset.s);
   if(a==='status'){s.status=t.value;commit();}
   else if(a==='ms-toggle'){const m=s.milestones.find(x=>x.id===t.dataset.m);if(m){m.done=t.checked;commit();}}
   else if(a==='ev-toggle')setDone(t.dataset.e,t.checked);
@@ -315,6 +432,7 @@ app.addEventListener('change',e=>{
 app.addEventListener('submit',e=>{
   e.preventDefault();const f=e.target,d=new FormData(f);
   if(f.dataset.form==='login'){login(d);return;}
+  useFor(f);
   const title=String(d.get('title')||'').trim();if(!title)return;
   if(f.dataset.form==='stuck'){state.stuck[f.dataset.e]=title;ui.stuck=false;}
   else if(f.dataset.form==='add-ms'){S(f.dataset.s).milestones.push({id:uid(),date:String(d.get('date')||'')||null,title,done:false});}
@@ -339,19 +457,10 @@ function login(d){
   });
 }
 async function signOut(){
-  try{if(sync)await sync.flushAndWait();}catch(e){console.error('projects-app: saving before sign-out failed',e);}
-  if(sync)sync.discardBackup();  // nothing of this account's data stays in the browser
+  try{await Promise.all(Object.values(projects).filter(p=>p.sync).map(p=>p.sync.flushAndWait()));}catch(e){console.error('projects-app: saving before sign-out failed',e);}
+  eachSync(s=>s.discardBackup());  // nothing of this account's data stays in the browser
   try{await signOutUser();}catch(e){console.error('projects-app: sign-out failed',e);}
   location.reload();
-}
-async function importProject(userId){
-  state=null;view='importing';viewMsg='';render();
-  try{
-    const seed=await loadSeed();
-    if(!seed){view='nodata';viewMsg='הייבוא הראשוני רץ רק מעותק מקומי (localhost) שיש בו data-export.json או source-artifact.html. ראה README.';render();return;}
-    const created=await importIfMissing(userId,PROJECT_ID,seed.state);  // either way, the listener delivers the document
-    console.info('projects-app: import '+(created?'created the document from '+seed.source:'skipped, the document already exists'));
-  }catch(err){console.error('projects-app: import failed',err);view='error';viewMsg='הייבוא נכשל: '+((err&&(err.code||err.message))||'');render();}
 }
 let signedIn=false;
 watchAuth(user=>{
@@ -359,11 +468,35 @@ watchAuth(user=>{
   if(signedIn)return;
   signedIn=true;view='loading';render();
   startCalendar();
-  sync=openProject(user.uid,PROJECT_ID,{
-    onData:data=>{data.doneEvents=data.doneEvents||{};data.stuck=data.stuck||{};if(!state)setStatus('נשמר בענן');state=data;render();},
-    onMissing:()=>importProject(user.uid),
-    onOffline:()=>{if(!state){view='offline';render();}},
-    onError:err=>{state=null;view='error';viewMsg=(err&&err.code==='permission-denied'?'אין הרשאה (permission-denied). ייתכן שחוקי Firestore או ה־UID בהם לא מעודכנים.':'שגיאה: '+((err&&(err.code||err.message))||'לא ידועה'))+' רענן את העמוד כדי לנסות שוב.';render();},
-    onSaveState
+  watchProjects(user.uid,{
+    onList:ids=>syncList(user.uid,ids),
+    onOffline:()=>{if(listed===null){view='offline';render();}},
+    onError:showError
   });
 });
+function showError(err){view='error';viewMsg=(err&&err.code==='permission-denied'?'אין הרשאה (permission-denied). ייתכן שחוקי Firestore או ה־UID בהם לא מעודכנים.':'שגיאה: '+((err&&(err.code||err.message))||'לא ידועה'))+' רענן את העמוד כדי לנסות שוב.';render();}
+// Opens a listener for each new project in the list and closes the ones that left it.
+function syncList(userId,ids){
+  listed=ids.slice();
+  ids.forEach(id=>{if(projects[id])return;const p=projects[id]={id,state:null,sync:null};
+    p.sync=openProject(userId,id,{
+      onData:data=>{data.doneEvents=data.doneEvents||{};data.stuck=data.stuck||{};if(!loadedIds().length)setStatus('נשמר בענן');p.state=data;if(cur===id)state=data;render();},
+      onMissing:()=>dropProject(id),   // deleted: drop it, never recreate it
+      onOffline:()=>{},
+      onError:showError,
+      onSaveState:saveStateOf(id)
+    });});
+  Object.keys(projects).forEach(id=>{if(!ids.includes(id))dropProject(id);});
+  if(!ids.length&&view!=='error')view='empty';
+  render();
+}
+function dropProject(id){
+  const p=projects[id];if(!p)return;
+  p.sync.close();delete projects[id];delete saveStates[id];
+  if(listed)listed=listed.filter(x=>x!==id);
+  if(cur===id){cur=null;state=null;}
+  if(listed&&!listed.length&&view!=='error')view='empty';
+  render();
+}
+readRoute();
+window.addEventListener('hashchange',()=>{if(location.hash&&!location.hash.startsWith('#/'))return;readRoute();ui.warnP=null;render();window.scrollTo(0,0);});

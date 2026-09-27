@@ -1,7 +1,9 @@
-/* Firebase: sign-in and the project document.
+/* Firebase: sign-in, the list of projects, and each project document.
 
    Each project is one Firestore document, users/{uid}/projects/{projectId}, holding the same object
    the artifact kept inside its <script id="state"> tag, plus updatedAt set by the server.
+   watchProjects() follows the list; openProject() follows and saves one document. Nothing here
+   ever creates a project document: there's no import, so a deleted document stays deleted.
 
    How saving and syncing fit together (the echo risk madrid-trip's budget.js avoids with getDoc,
    handled here because the dashboard needs onSnapshot for cross-device sync):
@@ -19,11 +21,12 @@
    - Fields this code doesn't know are never written, so newer data survives an older tab.
 
    tests/serve-test.py --emulator rewrites the two SDK import lines below and the getFirestore line
-   to point at the local emulators. If you change those lines, update the rewrite there too. */
+   to point at the local emulators, and in both test modes rewrites the PROJECTS line so tests only
+   ever touch users/{uid}/projects-test. If you change those lines, update the rewrites there too. */
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
-import { getFirestore, doc, onSnapshot, writeBatch, runTransaction, serverTimestamp, deleteField, arrayUnion, arrayRemove, FieldPath } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
+import { getFirestore, collection, doc, onSnapshot, writeBatch, serverTimestamp, deleteField, arrayUnion, arrayRemove, FieldPath } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
 import { firebaseConfig } from './firebase-config.js';
 
 const app = initializeApp(firebaseConfig);
@@ -36,7 +39,20 @@ export const watchAuth = callback => onAuthStateChanged(auth, callback);
 export const signIn = (email, password) => signInWithEmailAndPassword(auth, email, password);
 export const signOutUser = () => signOut(auth);
 
-const projectRef = (uid, projectId) => doc(db, 'users', uid, 'projects', projectId);
+const PROJECTS = 'projects';
+const projectRef = (uid, projectId) => doc(db, 'users', uid, PROJECTS, projectId);
+
+// The ids of the user's projects, live. onList gets the full list on every change. A first answer
+// that comes from the cache with nothing in it means offline with nothing cached: no verdict yet.
+export function watchProjects(uid, handlers) {
+  return onSnapshot(collection(db, 'users', uid, PROJECTS), snap => {
+    if (snap.metadata.fromCache && snap.empty) { handlers.onOffline(); return; }
+    handlers.onList(snap.docs.map(d => d.id));
+  }, err => {
+    console.error('projects-app: project list listener failed', err);
+    handlers.onError(err);
+  });
+}
 
 // A plain JSON copy (which also drops undefined, which Firestore rejects), without updatedAt,
 // which the server sets.
@@ -144,7 +160,8 @@ function removeOtherUsersBackups(uid) {
 }
 
 // Listens to one project document and saves changes to it.
-// handlers: onData(state), onMissing(), onOffline(), onError(err), onSaveState('saving'|'saved'|'error', err)
+// handlers: onData(state), onMissing() (the document doesn't exist or was deleted; nothing recreates
+// it), onOffline(), onError(err), onSaveState('saving'|'saved'|'error', err)
 export function openProject(uid, projectId, handlers) {
   const ref = projectRef(uid, projectId);
   let latest = null;      // newest local state, waiting to be written
@@ -318,38 +335,4 @@ export function openProject(uid, projectId, handlers) {
       unsubscribe();
     }
   };
-}
-
-// One-time import: creates the document only if it doesn't exist, inside a transaction, so an
-// existing document is never overwritten, even if two tabs get here at once.
-export function importIfMissing(uid, projectId, seed) {
-  const ref = projectRef(uid, projectId);
-  return runTransaction(db, async tx => {
-    const current = await tx.get(ref);
-    if (current.exists()) return false;
-    tx.set(ref, { ...toDoc(seed), updatedAt: serverTimestamp() });
-    return true;
-  });
-}
-
-// Where the first import comes from: data-export.json (the dashboard's "ייצוא נתונים" output) if it
-// exists, otherwise the state embedded in source-artifact.html. Both are gitignored, so on the live
-// site both are 404 and this returns null: the import only ever runs from a local checkout.
-export async function loadSeed() {
-  const exported = await fetch('data-export.json', { cache: 'no-store' });
-  if (exported.ok) return { source: 'data-export.json', state: checkSeed(await exported.json()) };
-  const artifact = await fetch('source-artifact.html', { cache: 'no-store' });
-  if (artifact.ok) {
-    const el = new DOMParser().parseFromString(await artifact.text(), 'text/html').getElementById('state');
-    if (!el) throw new Error('source-artifact.html has no <script id="state">');
-    return { source: 'source-artifact.html', state: checkSeed(JSON.parse(el.textContent)) };
-  }
-  return null;
-}
-
-function checkSeed(state) {
-  if (!state || !state.project || !state.project.decision || !Array.isArray(state.streams) || !Array.isArray(state.rules)) {
-    throw new Error('the import file does not look like dashboard data');
-  }
-  return state;
 }

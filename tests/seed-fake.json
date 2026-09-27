@@ -1,0 +1,315 @@
+{
+ "_note": "Made-up test data for tests/seed-in-page.js. Never real data: the repo is public.",
+ "projects": {
+  "fake-madrid": {
+   "version": 1,
+   "log": [],
+   "doneEvents": {},
+   "stuck": {},
+   "project": {
+    "name": "מדריד: ניסוי שטח (בדיקה)",
+    "goal": "פרויקט בדיקה במבנה של מדריד. כל הנתונים כאן מומצאים.",
+    "flight": "2026-11-01",
+    "buffer": {
+     "from": "2026-10-29",
+     "to": "2026-10-31"
+    },
+    "decision": {
+     "date": "2026-11-14",
+     "question": "שאלת בדיקה: ממשיכים?"
+    },
+    "success": [
+     "סאבלט בדיקה סגור",
+     "Workaway בדיקה פעיל",
+     "טיול ותקציב מסודרים"
+    ],
+    "calendarKey": "מדריד",
+    "status": "active"
+   },
+   "maxHeavy": 2,
+   "rules": [
+    "כלל בדיקה: 5 שעות בשבוע, מקסימום 2 מוקדים כבדים.",
+    "כלל בדיקה שני."
+   ],
+   "streams": [
+    {
+     "id": "sublet",
+     "name": "סאבלט",
+     "status": "active",
+     "heavy": true,
+     "match": [
+      "סאבלט",
+      "דירה"
+     ],
+     "milestones": [
+      {
+       "id": "s1",
+       "date": "2026-09-30",
+       "title": "מודעה עולה",
+       "done": false
+      },
+      {
+       "id": "s2",
+       "date": "2026-10-10",
+       "title": "שוכר נבחר",
+       "done": false
+      },
+      {
+       "id": "s3",
+       "date": null,
+       "title": "לעדכן שכנים",
+       "done": true
+      }
+     ]
+    },
+    {
+     "id": "workaway",
+     "name": "Workaway",
+     "status": "active",
+     "heavy": true,
+     "match": [
+      "Workaway"
+     ],
+     "milestones": [
+      {
+       "id": "w1",
+       "date": "2026-10-05",
+       "title": "פרופיל מוכן",
+       "done": false
+      }
+     ]
+    },
+    {
+     "id": "trip",
+     "name": "תכנון טיול + תקציב",
+     "status": "waiting",
+     "heavy": false,
+     "match": [
+      "טיול",
+      "תקציב"
+     ],
+     "milestones": [
+      {
+       "id": "t1",
+       "date": "2026-10-15",
+       "title": "תוכנית השבועיים סגורה",
+       "done": false
+      }
+     ],
+     "links": [
+      {
+       "label": "אפליקציית התקציב",
+       "url": "https://matankashi.github.io/madrid-trip/"
+      }
+     ]
+    },
+    {
+     "id": "spanish",
+     "name": "ספרדית",
+     "status": "habit",
+     "heavy": false,
+     "match": [
+      "ספרדית"
+     ],
+     "milestones": [],
+     "habit": {
+      "focus": "דיבור בקול, 20 דקות."
+     }
+    },
+    {
+     "id": "work",
+     "name": "עבודה",
+     "status": "waiting",
+     "heavy": false,
+     "match": [
+      "עבודה"
+     ],
+     "milestones": [
+      {
+       "id": "j1",
+       "date": "2026-10-20",
+       "title": "לבדוק זכויות",
+       "done": false
+      }
+     ]
+    },
+    {
+     "id": "field",
+     "name": "באפר וניסוי שטח",
+     "status": "active",
+     "heavy": false,
+     "match": [
+      "באפר",
+      "ניסוי שטח"
+     ],
+     "milestones": [
+      {
+       "id": "f1",
+       "date": "2026-10-29",
+       "title": "באפר מתחיל",
+       "done": false
+      }
+     ]
+    }
+   ]
+  },
+  "fake-coffee": {
+   "version": 1,
+   "log": [],
+   "doneEvents": {},
+   "stuck": {},
+   "project": {
+    "name": "קפה: קלייה ביתית",
+    "goal": "פרופיל קלייה קבוע לשלושה זנים עד סוף אוקטובר.",
+    "decision": {
+     "date": "2026-10-31",
+     "question": "ממשיכים לקלות בבית?"
+    },
+    "success": [
+     "3 פרופילים כתובים",
+     "ספק ירוק קבוע"
+    ],
+    "calendarKey": "קפה",
+    "status": "active"
+   },
+   "maxHeavy": 1,
+   "rules": [
+    "קלייה אחת בשבוע לכל היותר."
+   ],
+   "streams": [
+    {
+     "id": "roast",
+     "name": "קלייה",
+     "status": "active",
+     "heavy": true,
+     "match": [
+      "קלייה"
+     ],
+     "milestones": [
+      {
+       "id": "r1",
+       "date": "2026-10-08",
+       "title": "פרופיל בהיר כתוב",
+       "done": true
+      },
+      {
+       "id": "r2",
+       "date": "2026-10-22",
+       "title": "פרופיל כהה כתוב",
+       "done": false
+      }
+     ]
+    },
+    {
+     "id": "supply",
+     "name": "ספקים",
+     "status": "active",
+     "heavy": false,
+     "match": [
+      "ספקים"
+     ],
+     "milestones": [
+      {
+       "id": "p1",
+       "date": "2026-10-01",
+       "title": "3 הצעות מחיר",
+       "done": false
+      }
+     ]
+    },
+    {
+     "id": "brand",
+     "name": "מיתוג",
+     "status": "waiting",
+     "heavy": false,
+     "match": [
+      "מיתוג"
+     ],
+     "milestones": []
+    }
+   ]
+  },
+  "fake-fitness": {
+   "version": 1,
+   "log": [],
+   "doneEvents": {},
+   "stuck": {},
+   "project": {
+    "name": "כושר",
+    "goal": "3 אימונים בשבוע, בלי פציעות.",
+    "success": [
+     "12 אימונים באוקטובר"
+    ],
+    "calendarKey": "כושר",
+    "status": "active"
+   },
+   "maxHeavy": 1,
+   "rules": [],
+   "streams": [
+    {
+     "id": "run",
+     "name": "ריצה",
+     "status": "habit",
+     "heavy": false,
+     "match": [
+      "ריצה"
+     ],
+     "milestones": [
+      {
+       "id": "k1",
+       "date": "2026-10-31",
+       "title": "10 ק״מ ברצף",
+       "done": false
+      }
+     ],
+     "habit": {
+      "focus": "5 ק״מ בקצב נוח."
+     }
+    },
+    {
+     "id": "strength",
+     "name": "כוח",
+     "status": "active",
+     "heavy": false,
+     "match": [
+      "כוח"
+     ],
+     "milestones": []
+    }
+   ]
+  },
+  "fake-garden": {
+   "version": 1,
+   "log": [],
+   "doneEvents": {},
+   "stuck": {},
+   "project": {
+    "name": "גינה במרפסת",
+    "goal": "עציצי תבלינים שמחזיקים את החורף.",
+    "calendarKey": "גינה",
+    "status": "paused"
+   },
+   "maxHeavy": 1,
+   "rules": [],
+   "streams": [
+    {
+     "id": "plant",
+     "name": "שתילה",
+     "status": "waiting",
+     "heavy": false,
+     "match": [
+      "שתילה"
+     ],
+     "milestones": [
+      {
+       "id": "g1",
+       "date": "2026-11-01",
+       "title": "לשתול בזיליקום",
+       "done": false
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

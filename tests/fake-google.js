@@ -53,7 +53,14 @@
     timed('e-colon', 'מדריד: באפר — לסגור קצוות', at(4, 16), 30),
     timed('e-nostream', 'מדריד — משהו כללי', at(5, 10), 30),
     timed('e-later', 'מדריד — Workaway: 5 פניות', at(12, 10), 60),
-    timed('e-out-of-window', 'מדריד — אחרי נקודת ההחלטה', new Date('2026-12-01T10:00:00+02:00'), 60)
+    timed('e-out-of-window', 'מדריד — אחרי נקודת ההחלטה', new Date('2026-12-01T10:00:00+02:00'), 60),
+    // The other made-up projects in tests/seed-fake.json (calendarKey קפה, כושר, and the paused גינה)
+    timed('c-past', 'קפה — ספקים: לבקש 3 הצעות', at(-1, 12), 30),
+    timed('c-today', 'קפה — קלייה: פרופיל בהיר', at(0, 7), 45),
+    timed('c-next', 'קפה — מיתוג: סקיצה ללוגו', at(2, 19), 60),
+    timed('k-today', 'כושר — ריצה 5 ק״מ', at(0, 21), 40),
+    timed('k-tomorrow', 'כושר — כוח: פלג גוף עליון', at(1, 7), 45),
+    timed('g-today', 'גינה — שתילה: בזיליקום', at(0, 17), 30)
   ];
   const startOf = e => new Date(e.start.dateTime || e.start.date);
   const endOf = e => new Date(e.end.dateTime || e.end.date);

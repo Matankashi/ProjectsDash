@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local test server. It never touches the real project document.
+"""Local test server. It never touches the real projects.
 
 From the repo root:
   python3 tests/serve-test.py [--emulator] [port]        default port 8010, open http://localhost:8010
@@ -7,10 +7,13 @@ From the repo root:
 Always:
 - Sends Cache-Control: no-store on everything. Otherwise Chrome keeps running an old app.js after an
   edit, and a test silently checks old code (this happened on madrid-trip).
-- Rewrites app.js as it's served, so the page reads and writes
-  users/{uid}/projects/madrid-field-trial-test instead of madrid-field-trial, with its own timer key,
-  and adds a red TEST bar to the page. Files on disk are never modified.
-- Listens on 127.0.0.1 only: the folder holds source-artifact.html, which is real data.
+- Rewrites firebase.js and app.js as they're served, so the page reads and writes the collection
+  users/{uid}/projects-test instead of users/{uid}/projects, with its own timer key, and adds a red
+  TEST bar to the page. Files on disk are never modified.
+- Adds tests/seed-in-page.js: once signed in, if projects-test is empty, it fills it with the made-up
+  projects in tests/seed-fake.json. Without --emulator that is a write to the real Firebase project
+  (only under projects-test). Real data is never needed for testing.
+- Listens on 127.0.0.1 only.
 
 --emulator: fully offline, no real project and no Google account involved.
 - Serves a demo firebase-config.js and points firebase.js at the local Auth and Firestore emulators.
@@ -40,17 +43,20 @@ PORT = int(ports[0]) if ports else 8010
 
 REWRITES = {
     '/app.js': [
-        ("const PROJECT_ID='madrid-field-trial';", "const PROJECT_ID='madrid-field-trial-test';"),
         ("const LS_TIMER='madrid-dash-timer';", "const LS_TIMER='madrid-dash-timer-test';"),
+    ],
+    '/firebase.js': [
+        ("const PROJECTS = 'projects';", "const PROJECTS = 'projects-test';"),
     ],
     '/index.html': [
         ('<body>', '<body>\n<div style="position:sticky;top:0;z-index:9;background:#B8352C;color:#fff;'
-                   'text-align:center;font:700 13px/1.8 system-ui,sans-serif">TEST: madrid-field-trial-test'
+                   'text-align:center;font:700 13px/1.8 system-ui,sans-serif">TEST: projects-test'
                    + (' (emulator)' if EMULATOR else '') + '</div>'),
+        ('</head>', '<script type="module" src="tests/seed-in-page.js"></script>\n</head>'),
     ],
 }
 if EMULATOR:
-    REWRITES['/firebase.js'] = [
+    REWRITES['/firebase.js'] += [
         ('import { getAuth, ', 'import { getAuth, connectAuthEmulator, '),
         ('import { getFirestore, ', 'import { getFirestore, connectFirestoreEmulator, '),
         ('const db = getFirestore(app);',
