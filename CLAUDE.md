@@ -89,7 +89,8 @@ Repo conventions:
   click handler and scroll instead of changing the hash.
 - Home: the app bar, then "היום" (today's blocks from all active projects, each with its ✓), then:
   one active project → its overview panel and its full dashboard; two or more → an overview card per
-  active project linking to `#/p/<id>`. Paused projects sit in a collapsed "מוקפאים" row with "הפעל".
+  active project linking to `#/p/<id>`, ordered by nearest open deadline (none last, ties by name).
+  Paused projects sit in a collapsed "מוקפאים" row with "הפעל".
   At most `MAX_ACTIVE` (3) active; activating a fourth shows a warning.
 - The overview panel (`overview()`) replaced the artifact's header: name, goal, countdown, overall
   progress (milestones %) plus "השבוע: X מתוך Y בלוקים", next deadline, next block, missed-and-
@@ -104,6 +105,24 @@ Repo conventions:
   log, rules) render identical HTML to v1.1 with the same data, apart from clock times and the new
   `id="st-<stream>"` anchors.
 
+## Editing (v1.2)
+
+- "עריכה" in the overview panel opens `editPanel()`: project name (required), goal, success criteria
+  (add/edit/delete), the calendar key, and pause/activate (the 3-active limit applies). "עריכה" in a stream's head (the same
+  `ui.open` state as "כל אבני הדרך") shows milestone edit/delete, the add form, and `linksEditor()`.
+- Everything edited lives in `project` or `streams`, so it's saved as a whole field, last write wins.
+- Calendar key: the count of matching blocks updates while typing (`keyCount()`, over the loaded
+  calendar window only). A key that matches nothing, or can't be checked because the calendar isn't
+  loaded, needs a second tap ("שמור בכל זאת"). Errors and confirmations are written into the form in
+  place, never by re-rendering, so nothing typed is lost; the same goes for link errors.
+- Links: `isUrl()` is the same http(s)-only rule `streamLinks()` renders by, plus a 2000-character cap.
+  Links that fail it are listed in the editor with "לא מוצג" so they can be fixed or deleted. Removing
+  the last link deletes the `links` key. Inputs carry `maxlength` (`MAX_LEN`) and saves cut to it.
+- Deleting a milestone, link or success criterion takes two taps on the same row (`delButton()`,
+  `confirmDel()`): × becomes "למחוק? כן, למחוק / ביטול", with "ביטול" where × was, so a double tap
+  cancels. Any other tap drops the question. No dialogs.
+- All values are rendered through `esc()`: a label like `<img onerror=...>` shows as text (tested).
+
 ## Stream links (v1.1)
 
 - `streams[].links = [{label, url}]`, optional. `streamLinks()` in `app.js` shows them under the
@@ -111,8 +130,7 @@ Repo conventions:
   skipped), labels and URLs are escaped, and a missing label falls back to the URL.
 - Nothing in `firebase.js` knows about `links`. Edits change the stream objects in place, so status,
   heavy and milestone edits keep the field. It's part of `streams`, so last-write-wins applies.
-- No editing UI yet (planned for v1.2). Links are added in the Firebase console, or by a one-off
-  write the user approves.
+- Edited in the app since v1.2 (see "Editing").
 - The header also has a general "יומן Google" link, and each block in the 7-day list has a
   "פתח ביומן" link (the event's `htmlLink`), placed outside the checkbox label.
 
@@ -139,6 +157,8 @@ Repo conventions:
 
 ## Testing gotchas
 
+- **Emulator only** (the user's decision, 2026-09-27): don't run `serve-test.py` without `--emulator`
+  unless the user explicitly approves that run.
 - Never test against the real `projects` collection. `tests/serve-test.py` rewrites `firebase.js` on
   the fly to use `users/{uid}/projects-test`, sends `no-store`, and binds to 127.0.0.1 only.
 - It also adds `tests/seed-in-page.js`: once signed in, if `projects-test` is empty, it fills it with
@@ -175,8 +195,9 @@ field by field afterwards.
 **v1.2: multiple projects and in-app editing (in progress).** Only the Madrid project for now; the
 model and screens take more without code changes. Stage 1 (built 2026-09-27): home with "היום", the
 overview panel and cards, the 3-active limit, `calendarKey`/`status`, the import removed, fake seed
-data, tests on `projects-test`. Stage 2: editing (goal, success criteria, milestone titles and dates,
-stream links, project status, calendar key with a count of matching blocks and a warning at zero).
+data, tests on `projects-test`. Stage 2 (built 2026-09-27): editing (goal, success criteria, milestone titles and
+dates, stream links, project status, calendar key with a count of matching blocks and a second tap
+at zero), and cards ordered by nearest deadline.
 Before deploying v1.2: back up the real document to `~/Documents/projects-app-backup/` (dated JSON),
 then add `project.calendarKey: "מדריד"` to it, with a before/after preview and the user's OK.
 

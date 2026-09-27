@@ -26,7 +26,8 @@ let cur=null;                // the current project's id
 let route={name:'home'};     // #/ is home, #/p/<id> is one project
 let view='auth',viewMsg='';  // what render() shows until every listed project has arrived
 
-let ui={open:{},stuck:false,warn:null,showLog:false,exp:false,warnP:null};
+let ui={open:{},stuck:false,warn:null,showLog:false,exp:false,warnP:null,
+  editP:null,editSc:null,editMs:null,editLink:null,keyDraft:null,keyConfirm:null,confirmDel:null};  // editing (v1.2)
 
 let saveText='';
 
@@ -68,8 +69,8 @@ let calBusy=false;
 /* A project's blocks are the events whose title contains its calendarKey ("מדריד — סאבלט: ...");
    the key and the dash after it are dropped from the title. No key, no blocks. */
 const reEsc=s=>s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-function toBlocks(payload){
-  const p=payload,key=String(state.project.calendarKey||'').trim();
+function toBlocks(payload,draftKey){
+  const p=payload,key=String((draftKey===undefined?state.project.calendarKey:draftKey)||'').trim();
   const evs=(p&&Array.isArray(p.items))?p.items:[];
   if(!key)return [];
   const strip=new RegExp('^.*?'+reEsc(key)+'\\s*[—–:\\-]\\s*');
@@ -208,7 +209,7 @@ function overview(card){
   ].join('');
   const rows=state.streams.map(s=>{const p=streamPace(s);const inner=`<span class="ovs-n">${esc(s.name)}</span><span class="ovs-bar"><span class="ovs-fill ${p.cls}" style="width:${p.pct}%"></span></span><span class="ovs-p ${p.cls}">${p.pct}%</span>`;
     return card?`<li class="ovs" title="${esc(p.note)}">${inner}</li>`:`<li><a class="ovs" href="#st-${esc(s.id)}" title="${esc(p.note)}" aria-label="${esc(s.name)}: ${p.pct}%, ${esc(p.note)}">${inner}</a></li>`;}).join('');
-  const head=`<div class="ov-head">${card?`<h2>${esc(P.name)}</h2>`:`<h1>${esc(P.name)}</h1>`}${P.status==='paused'?'<span class="chip calm">מוקפא</span>':''}</div>${P.goal?`<p class="goal">${esc(P.goal)}</p>`:''}${c?`<div class="count">${c}</div>`:''}`;
+  const head=`<div class="ov-head">${card?`<h2>${esc(P.name)}</h2>`:`<h1>${esc(P.name)}</h1>`}${P.status==='paused'?'<span class="chip calm">מוקפא</span>':''}${card?'':`<button class="b-link ov-edit" data-act="edit-project" aria-expanded="${ui.editP===cur}">${ui.editP===cur?'סגור עריכה':'עריכה'}</button>`}</div>${P.goal?`<p class="goal">${esc(P.goal)}</p>`:''}${c?`<div class="count">${c}</div>`:''}`;
   const body=`${head}<div class="ov-grid">${tiles}</div>${rows?`<ul class="ov-streams" aria-label="המסלולים">${rows}</ul>`:''}`;
   return card?`<a class="ov card" href="#/p/${encodeURIComponent(cur)}" data-p="${id}">${body}</a>`:`<header class="ov top">${body}</header>`;
 }
@@ -229,14 +230,86 @@ function pausedView(){
   return `<details class="paused sec"${ui.warnP?' open':''}><summary>מוקפאים (${ids.length})</summary>${ui.warnP?`<p class="warn" role="alert">${esc(ui.warnP)}</p>`:''}<ul>${ids.map(id=>{const P=projects[id].state.project;
     return `<li data-p="${esc(id)}"><a href="#/p/${encodeURIComponent(id)}">${esc(P.name)}</a>${P.goal?`<span class="muted">${esc(P.goal)}</span>`:''}<button class="b-sec" data-act="activate">הפעל</button></li>`;}).join('')}</ul></details>`;
 }
+/* Editing. Everything edited here lives in `project` or `streams`, which are saved as whole fields
+   (last write wins), like the stream edits the artifact already had. */
+const MAX_LEN={title:200,text:500,label:80,url:2000,key:40};
+const isUrl=u=>/^https?:\/\/\S+$/i.test(u)&&u.length<=MAX_LEN.url;   // the same rule streamLinks() shows links by
+const isDate=d=>/^\d{4}-\d{2}-\d{2}$/.test(d);
+const eKey=(...a)=>[cur,...a].join(':');   // ids of the row being edited, per project
+/* Deleting takes two taps on the same row: × turns into "למחוק? כן, למחוק / ביטול". "ביטול" lands where
+   × was, so a double tap cancels instead of deleting. `attrs` are the × button's data attributes. */
+function delButton(key,act,attrs,label){
+  return ui.confirmDel===key
+    ?`<span class="del-q" role="status">למחוק?</span><button class="b-del" data-act="${act}" ${attrs}>כן, למחוק</button><button class="b-link" data-act="del-cancel">ביטול</button>`
+    :`<button class="x" data-act="${act}" ${attrs} aria-label="${label}">×</button>`;
+}
+// Runs the delete on the second tap; returns false after the first.
+function confirmDel(key){if(ui.confirmDel===key){ui.confirmDel=null;return true;}ui.confirmDel=key;render();focusIn('.b-del');return false;}
+/* How many blocks in the loaded calendar a calendar key would match; null when no calendar is loaded. */
+function keyCount(key){return cal.items.length||cal.status==='ok'?toBlocks({items:cal.items},key).length:null;}
+function keyNote(key){
+  const k=String(key||'').trim(),n=keyCount(k);
+  if(!k)return {warn:true,text:'צריך מילה כדי שהפרויקט יזהה בלוקים ביומן.'};
+  if(n===null)return {warn:true,text:'היומן לא מחובר, אז אי אפשר לבדוק כמה בלוקים תואמים. חבר את היומן כדי לבדוק.'};
+  if(n===0)return {warn:true,text:'אף בלוק ביומן לא תואם למילה הזו (בטווח התאריכים שנטען).'};
+  return {warn:false,text:(n===1?'בלוק אחד':n+' בלוקים')+' ביומן תואמים למילה הזו (בטווח התאריכים שנטען).'};
+}
+function editPanel(){
+  const P=state.project,sc=P.success||[],key=ui.keyDraft!==null?ui.keyDraft:(P.calendarKey||''),kn=keyNote(key);
+  const confirm=ui.keyConfirm!==null&&ui.keyConfirm===key.trim();
+  const scRows=sc.map((x,i)=>ui.editSc===eKey(i)
+    ?`<li><form class="form" data-form="sc-edit" data-i="${i}"><input name="text" value="${esc(x)}" required maxlength="${MAX_LEN.text}" aria-label="קריטריון הצלחה"><button class="b-sec">שמור</button><button type="button" class="b-link" data-act="edit-cancel">ביטול</button></form></li>`
+    :`<li><span class="ed-t">${esc(x)}</span>${ui.confirmDel===eKey('sc',i)?'':`<button class="b-link" data-act="sc-edit" data-i="${i}">עריכה</button>`}${delButton(eKey('sc',i),'sc-del',`data-i="${i}"`,'מחק: '+esc(x))}</li>`).join('');
+  const paused=P.status==='paused';
+  return `<section class="sec edit" aria-labelledby="edit-h"><div class="sec-head"><h2 id="edit-h">עריכת הפרויקט</h2><button class="b-link" data-act="edit-project">סגור</button></div>
+  <form class="edit-block" data-form="name"><h3><label for="ed-name">שם הפרויקט</label></h3><div class="form"><input id="ed-name" name="name" value="${esc(P.name||'')}" required maxlength="${MAX_LEN.title}"><button class="b-sec">שמור</button></div></form>
+  <form class="edit-block" data-form="goal"><h3><label for="ed-goal">מטרה</label></h3><div class="form"><textarea id="ed-goal" name="goal" rows="2" maxlength="${MAX_LEN.text}">${esc(P.goal||'')}</textarea><button class="b-sec">שמור</button></div></form>
+  <div class="edit-block"><h3>קריטריוני הצלחה</h3>${sc.length?`<ul class="ed-list">${scRows}</ul>`:'<p class="muted">אין עדיין קריטריונים.</p>'}
+    <form class="form" data-form="sc-add"><input name="text" required maxlength="${MAX_LEN.text}" placeholder="קריטריון חדש" aria-label="קריטריון חדש"><button class="b-sec">הוסף</button></form></div>
+  <form class="edit-block" data-form="key" novalidate><h3><label for="ed-key">מילת היומן</label></h3><p class="ed-help">אירוע ביומן שייך לפרויקט אם הכותרת שלו מכילה את המילה, למשל "${esc(P.calendarKey||'מדריד')} — סאבלט: ...".</p>
+    <div class="form"><input id="ed-key" name="key" data-act="key-input" value="${esc(key)}" maxlength="${MAX_LEN.key}" autocomplete="off"><button class="b-sec" id="key-save">${confirm?'שמור בכל זאת':'שמור'}</button></div>
+    <p id="key-count" class="${kn.warn?'warn':'ed-ok'}" role="status">${esc(kn.text)}</p></form>
+  <div class="edit-block"><h3>סטטוס</h3><p class="ed-help">הפרויקט ${paused?'מוקפא: הוא לא מופיע ב"היום" והבלוקים שלו לא נטענים.':'פעיל.'} אפשר עד ${MAX_ACTIVE} פרויקטים פעילים.</p>
+    <button class="b-sec" data-act="${paused?'activate':'pause'}">${paused?'הפעל את הפרויקט':'הקפא את הפרויקט'}</button>${ui.warnP?`<p class="warn" role="alert">${esc(ui.warnP)}</p>`:''}</div>
+  </section>`;
+}
+/* The calendar key: a key that matches nothing, or can't be checked, needs a second tap. */
+function saveKey(form,key){
+  const k=key.slice(0,MAX_LEN.key),kn=keyNote(k);
+  const out=form.querySelector('#key-count');
+  if(!k){out.className='warn';out.textContent=kn.text;return;}
+  if(k===(state.project.calendarKey||'')){ui.keyDraft=null;ui.keyConfirm=null;out.className='ed-ok';out.textContent='המילה לא השתנתה. '+kn.text;return;}
+  if(kn.warn&&ui.keyConfirm!==k){ui.keyConfirm=k;ui.keyDraft=k;out.className='warn';out.textContent=kn.text+' לשמור בכל זאת?';form.querySelector('#key-save').textContent='שמור בכל זאת';return;}
+  state.project.calendarKey=k;ui.keyDraft=null;ui.keyConfirm=null;commit();
+}
+/* Stream links: add or edit, http(s) only. Errors show in the form, so nothing typed is lost. */
+function saveLink(form,s,label,url){
+  const err=form.querySelector('.form-err');
+  if(!isUrl(url)){err.textContent='הכתובת צריכה להתחיל ב־https:// (או http://), בלי רווחים.';err.hidden=false;return;}
+  const link={label:label.slice(0,MAX_LEN.label),url};
+  if(form.dataset.form==='link-edit'){const i=+form.dataset.i;if(!s.links||!s.links[i])return;s.links[i]=link;}
+  else (s.links=s.links||[]).push(link);
+  ui.editLink=null;commit();
+}
+function linksEditor(s){
+  const L=s.links||[];
+  const rows=L.map((l,i)=>ui.editLink===eKey(s.id,i)
+    ?`<li><form class="form" data-form="link-edit" data-s="${esc(s.id)}" data-i="${i}" novalidate><input name="label" value="${esc(l&&l.label||'')}" maxlength="${MAX_LEN.label}" placeholder="שם הקישור" aria-label="שם הקישור"><input name="url" type="url" dir="ltr" value="${esc(l&&l.url||'')}" maxlength="${MAX_LEN.url}" placeholder="https://" aria-label="כתובת"><button class="b-sec">שמור</button><button type="button" class="b-link" data-act="edit-cancel">ביטול</button><p class="warn form-err" role="alert" hidden></p></form></li>`
+    :`<li><span class="ed-t">${esc(l&&l.label||l&&l.url||'')}</span><span class="lk-u" dir="ltr">${esc(l&&l.url||'')}</span>${isUrl(String(l&&l.url||''))?'':'<span class="chip red">לא מוצג: לא http(s)</span>'}${ui.confirmDel===eKey('link',s.id,i)?'':`<button class="b-link" data-act="link-edit" data-s="${esc(s.id)}" data-i="${i}">עריכה</button>`}${delButton(eKey('link',s.id,i),'link-del',`data-s="${esc(s.id)}" data-i="${i}"`,'מחק קישור')}</li>`).join('');
+  return `<div class="st-links-edit"><h4>קישורים</h4>${L.length?`<ul class="ed-list">${rows}</ul>`:''}
+  <form class="form" data-form="link-add" data-s="${esc(s.id)}" novalidate><input name="label" maxlength="${MAX_LEN.label}" placeholder="שם הקישור" aria-label="שם הקישור החדש"><input name="url" type="url" dir="ltr" maxlength="${MAX_LEN.url}" placeholder="https://" aria-label="כתובת הקישור החדש"><button class="b-sec">הוסף קישור</button><p class="warn form-err" role="alert" hidden></p></form></div>`;
+}
 /* One project's full page: the overview panel, then the artifact's dashboard. */
-function projectPage(extra){return `<div data-p="${esc(cur)}">${overview(false)}${extra||''}${nowView()}${weekView()}${streams()}${upcoming()}${timeline()}${logView()}${rulesView()}</div>`;}
+function projectPage(extra){return `<div data-p="${esc(cur)}">${overview(false)}${ui.editP===cur?editPanel():''}${extra||''}${nowView()}${weekView()}${streams()}${upcoming()}${timeline()}${logView()}${rulesView()}</div>`;}
+/* Cards: the nearest open deadline first, projects without one last, ties by name. */
+const nextDeadline=id=>{use(id);const o=allOpen()[0];return o?o.m.date:'9999-12-31';};
+function byDeadline(a,b){const x=nextDeadline(a),y=nextDeadline(b);return x<y?-1:x>y?1:projects[a].state.project.name.localeCompare(projects[b].state.project.name,'he');}
 /* Home: today across projects, then the one active project's full page, or a card per active project. */
 function homeView(){
   const act=activeIds();
   let h=bar(false)+todayView();
   if(act.length===1){use(act[0]);h+=projectPage(pausedView());}
-  else{h+=act.length?`<section class="cards sec" aria-label="פרויקטים פעילים">${act.map(id=>{use(id);return overview(true);}).join('')}</section>`:'<p class="muted sec">אין פרויקטים פעילים.</p>';h+=pausedView();}
+  else{h+=act.length?`<section class="cards sec" aria-label="פרויקטים פעילים">${act.slice().sort(byDeadline).map(id=>{use(id);return overview(true);}).join('')}</section>`:'<p class="muted sec">אין פרויקטים פעילים.</p>';h+=pausedView();}
   return h;
 }
 const names=b=>b.streams.map(id=>(S(id)||{}).name).filter(Boolean).join(' + ');
@@ -346,13 +419,15 @@ function streamView(s){
     habit=`<div class="habit"><span>השבוע: ${c} מתוך ${wb.length}</span><div class="dots">${wb.map(b=>`<button class="dot${isDone(b)?' on':''}" data-act="ev-flip" data-e="${esc(b.id)}" aria-pressed="${isDone(b)}" aria-label="ספרדית ${esc(whenLabel(b))}" title="${esc(whenLabel(b))}"></button>`).join('')}</div><p class="habit-f">${esc(s.habit.focus)}</p></div>`;
   }
   const list=shown.length?`<ul class="ms">${shown.map(m=>{const d=m.date?daysUntil(m.date):null;
-    return `<li class="${m.done?'done':''}"><label><input type="checkbox" data-act="ms-toggle" data-s="${s.id}" data-m="${m.id}"${m.done?' checked':''}><span class="ms-t">${esc(m.title)}</span></label>${m.date?(m.done?`<span class="ms-d">${fmt(m.date)}</span>`:`<span class="ms-d">${fmt(m.date)}</span><span class="chip ${urg(d)}">${rel(d)}</span>`):''}${open?`<button class="x" data-act="ms-del" data-s="${s.id}" data-m="${m.id}" aria-label="מחק">×</button>`:''}</li>`;}).join('')}</ul>`:'';
+    if(open&&ui.editMs===eKey(s.id,m.id))return `<li><form class="form" data-form="ms-edit" data-s="${s.id}" data-m="${m.id}"><input name="title" value="${esc(m.title)}" required maxlength="${MAX_LEN.title}" aria-label="שם אבן הדרך"><input name="date" type="date" value="${esc(m.date||'')}" aria-label="תאריך"><button class="b-sec">שמור</button><button type="button" class="b-link" data-act="edit-cancel">ביטול</button></form></li>`;
+    return `<li class="${m.done?'done':''}"><label><input type="checkbox" data-act="ms-toggle" data-s="${s.id}" data-m="${m.id}"${m.done?' checked':''}><span class="ms-t">${esc(m.title)}</span></label>${m.date?(m.done?`<span class="ms-d">${fmt(m.date)}</span>`:`<span class="ms-d">${fmt(m.date)}</span><span class="chip ${urg(d)}">${rel(d)}</span>`):''}${open?`${ui.confirmDel===eKey('ms',s.id,m.id)?'':`<button class="b-link ms-ed" data-act="ms-edit" data-s="${s.id}" data-m="${m.id}" aria-label="עריכה: ${esc(m.title)}">עריכה</button>`}${delButton(eKey('ms',s.id,m.id),'ms-del',`data-s="${s.id}" data-m="${m.id}"`,'מחק')}`:''}</li>`;}).join('')}</ul>`:'';
   const moreBtn=(ms.length>shown.length||open)?`<button class="b-link more" data-act="more" data-s="${s.id}">${open?'פחות':`כל אבני הדרך (${ms.length})`}</button>`:(!ms.length&&!s.habit?`<button class="b-link more" data-act="more" data-s="${s.id}">הוסף אבן דרך</button>`:'');
-  const add=open?`<form class="form" data-form="add-ms" data-s="${s.id}"><input name="title" required placeholder="אבן דרך חדשה"><input name="date" type="date" aria-label="תאריך"><button class="b-sec">הוסף</button></form>`:'';
+  const add=open?`<form class="form" data-form="add-ms" data-s="${s.id}"><input name="title" required maxlength="${MAX_LEN.title}" placeholder="אבן דרך חדשה"><input name="date" type="date" aria-label="תאריך"><button class="b-sec">הוסף</button></form>${linksEditor(s)}`:'';
   return `<article class="st st-${s.status}" id="st-${esc(s.id)}">
   <div class="st-head"><h3>${esc(s.name)}</h3><div class="st-tools">
     <select class="st-status" data-act="status" data-s="${s.id}" aria-label="סטטוס">${Object.keys(STATUS).map(k=>`<option value="${k}"${k===s.status?' selected':''}>${STATUS[k]}</option>`).join('')}</select>
     ${s.habit?'':`<button class="tog" data-act="heavy" data-s="${s.id}" aria-pressed="${!!s.heavy}">מוקד כבד</button>`}
+    <button class="b-link st-edit" data-act="more" data-s="${s.id}" aria-expanded="${open}">${open?'סיום עריכה':'עריכה'}</button>
   </div></div>${streamLinks(s)}${progress(s)}${next}${habit}${list}${moreBtn}${add}</article>`;
 }
 function streams(){
@@ -395,6 +470,7 @@ function render(){
 }
 
 /* events */
+function focusIn(sel){const el=app.querySelector(sel);if(el)el.focus();}
 // Before any handler: act on the project the element belongs to.
 function useFor(el){const h=el.closest('[data-p]');if(h&&projects[h.dataset.p]&&projects[h.dataset.p].state)use(h.dataset.p);}
 app.addEventListener('click',e=>{
@@ -405,6 +481,7 @@ app.addEventListener('click',e=>{
   if(b.dataset.act==='signout'){signOut();return;}
   useFor(b);
   const a=b.dataset.act,s=S(b.dataset.s),id=b.dataset.e;
+  if(ui.confirmDel&&!/-del$/.test(a))ui.confirmDel=null;   // any other tap drops a pending delete
   const m=s&&b.dataset.m?s.milestones.find(x=>x.id===b.dataset.m):null;
   switch(a){
     case 'timer':{const t=getTimer();if(t&&t.event===id)setTimer(null);else setTimer({start:Date.now(),minutes:+b.dataset.min||30,event:id});render();break;}
@@ -416,10 +493,19 @@ app.addEventListener('click',e=>{
     case 'cal-connect':connectCalendar();break;
     case 'heavy':if(!s.heavy&&state.streams.filter(x=>x.heavy).length>=state.maxHeavy){ui.warn=`כבר יש ${state.maxHeavy} מוקדים כבדים. תוריד אחד לפני שמוסיפים.`;render();}else{s.heavy=!s.heavy;ui.warn=null;commit();}break;
     case 'ms-done':if(m){m.done=true;commit();}break;
-    case 'ms-del':if(m){s.milestones=s.milestones.filter(x=>x!==m);commit();}break;
+    case 'ms-del':if(m&&confirmDel(eKey('ms',s.id,m.id))){s.milestones=s.milestones.filter(x=>x!==m);commit();}break;
+    case 'del-cancel':render();break;
     case 'more':ui.open[s.id]=!ui.open[s.id];render();break;
     case 'log':ui.showLog=!ui.showLog;render();break;
     case 'export':ui.exp=!ui.exp;render();break;
+    case 'edit-project':ui.editP=ui.editP===cur?null:cur;ui.editSc=null;ui.keyDraft=null;ui.keyConfirm=null;ui.warnP=null;render();break;
+    case 'edit-cancel':ui.editSc=ui.editMs=ui.editLink=null;render();break;
+    case 'sc-edit':ui.editSc=eKey(+b.dataset.i);render();focusIn('[data-form="sc-edit"] input');break;
+    case 'sc-del':{const sc=state.project.success||[],i=+b.dataset.i;if(sc[i]!==undefined&&confirmDel(eKey('sc',i))){sc.splice(i,1);ui.editSc=null;commit();}break;}
+    case 'ms-edit':if(m){ui.editMs=eKey(s.id,m.id);render();focusIn('[data-form="ms-edit"] input');}break;
+    case 'link-edit':ui.editLink=eKey(s.id,+b.dataset.i);render();focusIn('[data-form="link-edit"] input');break;
+    case 'link-del':{const i=+b.dataset.i;if(s&&s.links&&s.links[i]&&confirmDel(eKey('link',s.id,i))){s.links.splice(i,1);if(!s.links.length)delete s.links;ui.editLink=null;commit();}break;}
+    case 'pause':state.project.status='paused';ui.warnP=null;commit();break;
     case 'activate':if(activeIds().length>=MAX_ACTIVE){ui.warnP=`כבר יש ${MAX_ACTIVE} פרויקטים פעילים. תקפיא אחד לפני שמפעילים עוד.`;render();}else{state.project.status='active';ui.warnP=null;commit();if(gcal.tokenState()==='valid')refreshCalendar();}break;
   }
 });
@@ -429,10 +515,27 @@ app.addEventListener('change',e=>{
   else if(a==='ms-toggle'){const m=s.milestones.find(x=>x.id===t.dataset.m);if(m){m.done=t.checked;commit();}}
   else if(a==='ev-toggle')setDone(t.dataset.e,t.checked);
 });
+// The calendar key's match count updates while typing, in place, so the field keeps its focus.
+app.addEventListener('input',e=>{
+  const t=e.target;if(t.dataset.act!=='key-input')return;useFor(t);
+  ui.keyDraft=t.value;ui.keyConfirm=null;const kn=keyNote(t.value);
+  const out=app.querySelector('#key-count'),btn=app.querySelector('#key-save');
+  if(out){out.className=kn.warn?'warn':'ed-ok';out.textContent=kn.text;}if(btn)btn.textContent='שמור';
+});
 app.addEventListener('submit',e=>{
   e.preventDefault();const f=e.target,d=new FormData(f);
   if(f.dataset.form==='login'){login(d);return;}
   useFor(f);
+  const v=k=>String(d.get(k)||'').trim(),s=f.dataset.s?S(f.dataset.s):null;
+  switch(f.dataset.form){
+    case 'name':if(v('name')){state.project.name=v('name').slice(0,MAX_LEN.title);commit();}return;
+    case 'goal':state.project.goal=v('goal').slice(0,MAX_LEN.text);commit();return;
+    case 'sc-add':if(v('text')){(state.project.success=state.project.success||[]).push(v('text').slice(0,MAX_LEN.text));commit();}return;
+    case 'sc-edit':{const sc=state.project.success||[],i=+f.dataset.i;if(v('text')&&sc[i]!==undefined){sc[i]=v('text').slice(0,MAX_LEN.text);ui.editSc=null;commit();}return;}
+    case 'key':saveKey(f,v('key'));return;
+    case 'ms-edit':{const m=s&&s.milestones.find(x=>x.id===f.dataset.m);if(m&&v('title')){m.title=v('title').slice(0,MAX_LEN.title);m.date=isDate(v('date'))?v('date'):null;ui.editMs=null;commit();}return;}
+    case 'link-add':case 'link-edit':if(s)saveLink(f,s,v('label'),v('url'));return;
+  }
   const title=String(d.get('title')||'').trim();if(!title)return;
   if(f.dataset.form==='stuck'){state.stuck[f.dataset.e]=title;ui.stuck=false;}
   else if(f.dataset.form==='add-ms'){S(f.dataset.s).milestones.push({id:uid(),date:String(d.get('date')||'')||null,title,done:false});}

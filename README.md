@@ -45,8 +45,9 @@ as this project's block (Madrid: "מדריד"), and `status` is `active` or `pau
 - Other open devices update live.
 - The timer is per device, in localStorage.
 - A stream can carry links, shown under its name: `links: [{label, url}]` on the stream. Only
-  `http(s)` addresses are shown. There's no editing UI yet, so links are added in the Firebase
-  console. They're part of `streams`, so the same last-write-wins applies.
+  `http(s)` addresses are shown. They're part of `streams`, so the same last-write-wins applies.
+- In the app, "עריכה" edits the goal, success criteria, calendar key and active/paused status (on
+  the overview panel), and milestones and links (on each stream).
 
 ## Security
 
