@@ -43,6 +43,9 @@ doneEvents, stuck, log`) plus `updatedAt`, set by the server. The Madrid project
   the streams since.
 - Other open devices update live.
 - The timer is per device, in localStorage.
+- A stream can carry links, shown under its name: `links: [{label, url}]` on the stream. Only
+  `http(s)` addresses are shown. There's no editing UI yet, so links are added in the Firebase
+  console. They're part of `streams`, so the same last-write-wins applies.
 
 ## Security
 

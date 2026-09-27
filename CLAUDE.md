@@ -10,6 +10,19 @@ trial, migrated from the claude.ai artifact "מדריד: ניסוי שטח". The
 
 ## Working rules
 
+Standing rules from the user, for every session:
+
+1. **Stop and tell first.** If you find a problem, a risk, or anything the user should know, stop and
+   tell them before acting. Don't work around it silently.
+2. **Explicit approval per action.** Never write to real data, deploy, push, tag, change security
+   rules, or change anything in Firebase or Google Cloud without the user's explicit approval for
+   that specific action.
+3. **Security first.** Least privilege, no secrets in the repo, read-only calendar, UID-locked rules.
+   Flag anything that would weaken them, even if it's convenient.
+4. **Show before anything irreversible.** Show the user exactly what will change first.
+
+Repo conventions:
+
 - **Keep the artifact's behavior.** `app.js` is the artifact's script with only the claude.ai parts
   replaced; `styles.css` is its CSS with additions appended at the end. Don't restyle or rework
   views, `toBlocks`, the progress logic or the timer unless asked.
@@ -60,6 +73,18 @@ trial, migrated from the claude.ai artifact "מדריד: ניסוי שטח". The
 - Import (`importIfMissing`) runs in a transaction and never overwrites. On the live site both seed
   files are 404, so a missing document shows "אין עדיין נתונים לפרויקט הזה" and nothing is created.
 
+## Stream links (v1.1)
+
+- `streams[].links = [{label, url}]`, optional. `streamLinks()` in `app.js` shows them under the
+  stream's name. Only `http(s)` URLs are rendered (anything else gets one `console.warn` and is
+  skipped), labels and URLs are escaped, and a missing label falls back to the URL.
+- Nothing in `firebase.js` knows about `links`. Edits change the stream objects in place, so status,
+  heavy and milestone edits keep the field. It's part of `streams`, so last-write-wins applies.
+- No editing UI yet (planned for v1.2). Links are added in the Firebase console, or by a one-off
+  write the user approves.
+- The header also has a general "יומן Google" link, and each block in the 7-day list has a
+  "פתח ביומן" link (the event's `htmlLink`), placed outside the checkbox label.
+
 ## Calendar (calendar.js)
 
 - GET only, through `get()`. Scope `calendar.readonly` only. The token lives only in module memory:
@@ -97,11 +122,19 @@ trial, migrated from the claude.ai artifact "מדריד: ניסוי שטח". The
 - The fake's scenarios (`__fakeGoogle.scenario`) cover every calendar error path; see the top of
   `tests/fake-google.js`.
 
-## v1.1 backlog (plan with the user after v1.0 is tagged; nothing built yet)
+## Roadmap
 
-1. **Calendar links:** an "open in Calendar" link on every block in the 7-day list (today only the
-   "now" card has one), plus a general link to Google Calendar in the header.
-2. **Task calendar view inside the app:** a week grid showing only this project's calendar blocks,
-   colored per stream. Done blocks faded with a check, missed blocks in red. Tapping a block shows
-   its description, a "done" toggle and the Calendar link. Arrows move between weeks; RTL,
-   mobile-first. Still read-only against Google Calendar; the done state stays in Firestore.
+**v1.1 (links only):** a "פתח ביומן" link on every block in the 7-day list, a general Google
+Calendar link in the header, and data-driven per-stream links (see "Stream links"). After deploy,
+the user authorized one write to the real document: add the madrid-trip budget app link
+(`https://matankashi.github.io/madrid-trip/`) to the `trip` stream. Rehearse it on
+`madrid-field-trial-test` first, show the before/after of the `trip` stream, change only that
+stream's `links`, and confirm afterwards that nothing else in the document changed.
+
+**v1.2: multiple projects.** The user will add other life projects. A project switcher or an
+overview. Together with the multi-project editing UI: add/edit/remove for stream links.
+
+**v1.3: week-grid task calendar inside the app.** A week grid showing only this project's calendar
+blocks, colored per stream. Done blocks faded with a check, missed blocks in red. Tapping a block
+shows its description, a "done" toggle and the Calendar link. Arrows move between weeks; RTL,
+mobile-first. Still read-only against Google Calendar; the done state stays in Firestore.

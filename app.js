@@ -140,7 +140,7 @@ function setDone(id,on){
 function header(){
   const P=state.project,f=daysUntil(P.flight);
   const c=f>0?`<span class="count-n">${f}</span><span>ימים לטיסה (${fmt(P.flight)})</span>`:f===0?'<span class="count-n">היום</span><span>טסים</span>':`<span class="count-n">${daysUntil(P.decision.date)}</span><span>ימים לנקודת ההחלטה</span>`;
-  return `<header class="top"><div class="top-row"><h1>${esc(P.name)}</h1><span class="top-tools"><span id="save" class="save">${esc(saveText)}</span><button class="b-link out" data-act="signout">התנתקות</button></span></div><p class="goal">${esc(P.goal)}</p><div class="count">${c}</div></header>`;
+  return `<header class="top"><div class="top-row"><h1>${esc(P.name)}</h1><span class="top-tools"><span id="save" class="save">${esc(saveText)}</span><a class="b-link out" href="https://calendar.google.com/calendar/r" target="_blank" rel="noopener">יומן Google</a><button class="b-link out" data-act="signout">התנתקות</button></span></div><p class="goal">${esc(P.goal)}</p><div class="count">${c}</div></header>`;
 }
 const names=b=>b.streams.map(id=>(S(id)||{}).name).filter(Boolean).join(' + ');
 function nowView(){
@@ -177,7 +177,7 @@ function weekView(){
   const groups=[];items.forEach(b=>{const k=iso(b.start);let g=groups.find(x=>x.k===k);if(!g){g={k,d:b.start,list:[]};groups.push(g);}g.list.push(b);});
   return `<section class="sec" id="week"><div class="sec-head"><h2>הלו״ז הקרוב ביומן</h2>${calButton('b-link')}</div><p class="cal-note">${note}</p>
   <div class="wk">${groups.map(g=>`<div class="wk-day"><h3>${esc(dayLabel(g.d))}${dayLabel(g.d).startsWith('יום')?'':` <span class="muted">${DAYS[g.d.getDay()]} ${g.d.getDate()}.${g.d.getMonth()+1}</span>`}</h3><ul>${g.list.map(b=>{const done=isDone(b),missed=!done&&b.end<=n;
-    return `<li class="${done?'done':''}${missed?' missed':''}"><label><input type="checkbox" data-act="ev-toggle" data-e="${esc(b.id)}"${done?' checked':''}><span class="wk-time">${hm(b.start)}</span><span class="wk-t">${esc(b.title)}</span></label><span class="wk-s">${esc(names(b))}</span>${missed?'<span class="chip red">עבר ולא סומן</span>':''}</li>`;}).join('')}</ul></div>`).join('')||'<p class="muted">אין בלוקים בשבוע הקרוב.</p>'}</div></section>`;
+    return `<li class="${done?'done':''}${missed?' missed':''}"><label><input type="checkbox" data-act="ev-toggle" data-e="${esc(b.id)}"${done?' checked':''}><span class="wk-time">${hm(b.start)}</span><span class="wk-t">${esc(b.title)}</span></label><span class="wk-s">${esc(names(b))}</span>${b.link?`<a class="wk-cal" href="${esc(b.link)}" target="_blank" rel="noopener">פתח ביומן</a>`:''}${missed?'<span class="chip red">עבר ולא סומן</span>':''}</li>`;}).join('')}</ul></div>`).join('')||'<p class="muted">אין בלוקים בשבוע הקרוב.</p>'}</div></section>`;
 }
 function allOpen(){const a=[];state.streams.forEach(s=>s.milestones.forEach(m=>{if(!m.done&&m.date)a.push({m,s});}));return a.sort((x,y)=>byDate(x.m,y.m));}
 function upcoming(){
@@ -220,6 +220,16 @@ function progress(s){
   return `<div class="prog" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="התקדמות ${esc(s.name)}"><div class="prog-bar"><div class="prog-fill" style="width:${pct}%"></div>${exp&&exp<total?`<span class="prog-exp" style="inset-inline-start:${ep}%" title="איפה היית אמור להיות לפי היומן"></span>`:''}</div><span class="prog-n">${pct}%</span></div>
   <p class="prog-meta">${done} מתוך ${total} בלוקים ביומן. ${pace}${mt?`. אבני דרך: ${md} מתוך ${mt}`:''}</p>`;
 }
+/* Per-stream links live in the document: streams[].links = [{label, url}]. Only http(s) addresses
+   become links; anything else is skipped with one warning per address. */
+const warnedLinks=new Set();
+function streamLinks(s){
+  if(!Array.isArray(s.links))return '';
+  const a=s.links.map(l=>{const u=String((l&&l.url)||'');
+    if(!/^https?:\/\/\S+$/i.test(u)){if(!warnedLinks.has(s.id+' '+u)){warnedLinks.add(s.id+' '+u);console.warn('projects-app: skipped a link that is not http(s) in stream '+s.id);}return '';}
+    return `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(String(l.label||'').trim()||u)}</a>`;}).join('');
+  return a?`<div class="st-links">${a}</div>`:'';
+}
 function streamView(s){
   const open=!!ui.open[s.id],n=Date.now();
   const ms=s.milestones.slice().sort((a,b)=>(a.done-b.done)||byDate(a,b));
@@ -241,7 +251,7 @@ function streamView(s){
   <div class="st-head"><h3>${esc(s.name)}</h3><div class="st-tools">
     <select class="st-status" data-act="status" data-s="${s.id}" aria-label="סטטוס">${Object.keys(STATUS).map(k=>`<option value="${k}"${k===s.status?' selected':''}>${STATUS[k]}</option>`).join('')}</select>
     ${s.habit?'':`<button class="tog" data-act="heavy" data-s="${s.id}" aria-pressed="${!!s.heavy}">מוקד כבד</button>`}
-  </div></div>${progress(s)}${next}${habit}${list}${moreBtn}${add}</article>`;
+  </div></div>${streamLinks(s)}${progress(s)}${next}${habit}${list}${moreBtn}${add}</article>`;
 }
 function streams(){
   const h=state.streams.filter(s=>s.heavy).length;

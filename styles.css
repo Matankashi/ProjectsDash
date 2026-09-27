@@ -183,3 +183,8 @@ button{cursor:pointer}
 .login-err{margin:4px 0 0;background:var(--red-soft);color:var(--red);border-radius:10px;padding:8px 12px;font-weight:600}
 .b-primary{margin-top:8px;background:var(--cobalt);color:var(--surface);border:0;border-radius:12px;padding:10px 18px;font-weight:700}
 .b-primary:disabled{opacity:.6;cursor:default}
+
+/* v1.1: calendar link on each block in the 7-day list, and per-stream links */
+.wk-cal{font-size:.8rem;font-weight:600;color:var(--cobalt);text-underline-offset:3px}
+.st-links{display:flex;flex-wrap:wrap;gap:4px 14px;margin:6px 0 2px}
+.st-links a{font-size:.9rem;font-weight:600;color:var(--cobalt);text-underline-offset:3px}
