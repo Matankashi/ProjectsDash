@@ -1,6 +1,6 @@
 # Projects app
 
-**Version: v1.2**
+**Version: v1.3**
 
 A private dashboard for personal projects. The first project is the Madrid field trial
 ("מדריד: ניסוי שטח"), moved here from a claude.ai artifact. Static site on GitHub Pages, data in

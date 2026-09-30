@@ -1,6 +1,6 @@
 # Projects app
 
-**Version: v1.2**
+**Version: v1.3**
 
 A private project dashboard: static files on GitHub Pages (`https://matankashi.github.io/ProjectsDash/`,
 repo `git@github.com:Matankashi/ProjectsDash.git`, served from `main`), Firestore for data,
@@ -297,8 +297,10 @@ Before the deploy, the real document was backed up to
 `~/Documents/projects-app-backup/madrid-field-trial-2026-09-27.json`, and `project.calendarKey: "מדריד"`
 was added to it in one approved, previewed write (only that field; verified field by field).
 
-**v1.3: "Gates & Blocks" (in progress, not released).** A management layer for the preparation up to
-the flight: gates, per-stream RAG, a block runner, the Thursday checkpoint. Decided 2026-09-30:
+**v1.3: "Gates & Blocks", released 2026-09-30.** A management layer for the preparation up to the
+flight: gates, per-stream RAG, the tray, a block runner. The scope was frozen before the first gate:
+the metrics screen, the critical-path screen and the Thursday checkpoint were **not built** (their
+data is seeded and has no screen). Decided 2026-09-30:
 - The app manages the **preparation only**. What happens at the destination lives in a separate app.
 - Streams stay the array inside the project document, extended in place; there is no streams
   subcollection. **No stream id is ever hard-coded in code**: behavior comes from flags in the data
@@ -306,7 +308,14 @@ the flight: gates, per-stream RAG, a block runner, the Thursday checkpoint. Deci
 - `blocks/{eventId}.status` is the only read source for "done" (see "Blocks").
 - Rules unchanged: the recursive match already covers the new subcollections
   (`tests/rules-test.py` checks `gates`, `blocks`, `criticalPath`, `checkpoints`).
-- The calendar stays read-only. No tag until the user has checked the live site.
+- The calendar stays read-only.
+- Real data, each write approved, previewed and read back: the seed (8 gates, `criticalPath/chain`,
+  the extended streams), one gate criterion's link set to null, and the backfill of the six
+  `doneEvents` into `blocks` (create-only; `streamIds` and `title` taken from the log, never
+  recomputed from today's match words; `date` filled by `fillFacts()` on the first calendar
+  connect). Backups are in `~/Documents/projects-app-backup/`.
+- The live check found the tick guard untestable (nothing was awaiting); it is tested in the
+  emulator only.
 
 **v1.4:**
 - **Remove the dual write to `doneEvents`** (`setDone()` in `app.js`, and the `doneEvents` branch of
@@ -316,6 +325,10 @@ the flight: gates, per-stream RAG, a block runner, the Thursday checkpoint. Deci
   what the gate criteria already say (each step is a criterion of some gate), so today the same fact
   is ticked in two places. Nothing is built on the chain in v1.3 (no screen). Don't build one before
   this is decided.
+- **A stream card shows two different counts.** The top line ("X מתוך Y בלוקים ביומן", the %) counts
+  calendar events whose title matches the stream's match words today; the gate line counts recorded
+  blocks (`streamIds`). After match words change they disagree: one stream reads 0 of 1 and 1 of 1
+  at the same time. Confusing, not wrong. Decide which count the card leads with.
 - The week-grid task calendar (was planned as v1.3): a week grid showing only this project's calendar
   blocks, colored per stream. Done blocks faded with a check, missed blocks in red. Tapping a block
   shows its description, a "done" toggle and the Calendar link. Arrows move between weeks; RTL,
