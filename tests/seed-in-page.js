@@ -18,6 +18,11 @@ onAuthStateChanged(getAuth(getApp()), async user => {
     const seed = await (await fetch('tests/seed-fake.json', { cache: 'no-store' })).json();
     const batch = writeBatch(db);
     Object.entries(seed.projects).forEach(([id, state]) => batch.set(doc(list, id), state));
+    // Gates (v1.3) are dated relative to today, like the events in tests/fake-google.js.
+    const day = n => { const d = new Date(); d.setDate(d.getDate() + n); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+    Object.entries(seed.gates || {}).forEach(([id, gates]) => {
+      if (Array.isArray(gates)) gates.forEach(({ days, ...g }) => batch.set(doc(list, id, 'gates', g.id), { ...g, date: day(days) }));
+    });
     await batch.commit();
     console.info('projects-app test: filled projects-test with ' + Object.keys(seed.projects).length + ' made-up projects');
     // Reload so the app starts from the server's copy. Its project listeners opened while these writes

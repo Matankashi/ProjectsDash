@@ -80,6 +80,101 @@ Repo conventions:
   which doesn't fire a snapshot. The app never writes a document it hasn't loaded, so this only bites
   test code that writes through the page's own Firestore instance (the seeder reloads for this reason).
 
+## Blocks (v1.3, firebase.js `openBlocks()`)
+
+- One document per calendar event, `users/{uid}/projects/{projectId}/blocks/{eventId}`, created the
+  first time the block is acted on. No document means planned. The calendar gives only when (date,
+  time, title, event id); everything else about a block lives here.
+- Fields so far: `eventId`, `date` (the block's day), `streamIds` (every matching stream),
+  `status` (`planned`/`done`/`partial`/`skipped`), `confirmedOn` (`YYYY-MM-DD`, always set on done),
+  `confirmedAt` (server time, only when confirmed in the app; `null` on backfilled documents, which
+  carry `source: "doneEvents"`). **Never show a time for a document whose `confirmedAt` is null.**
+- **`status` is the only place "done" is read from** (`isDone()` in `app.js`). A past event is not a
+  done block. Nothing reads `doneEvents`.
+- **Dual write, until v1.4:** marking done also writes `doneEvents[eventId]` (and the log line) in the
+  project document, as before. Only `done` is mirrored; unmarking removes the key; `partial` and
+  `skipped` never go there. The two writes are separate requests, not one transaction.
+- Unmarking sets `status: "planned"` and clears `confirmedOn`/`confirmedAt`; the document stays.
+- Each change is one `setDoc` with merge, sent at once. Pending changes are kept in localStorage
+  (`projects-app:<uid>:<projectId>:blocks:pending`) until the server answers, and sent again on the
+  next load if at most 7 days old; another account's key is removed on open, sign-out removes this
+  one. A replayed confirmation gets the replay's server time (its `confirmedOn` is the original day).
+- The listener doesn't skip pending snapshots, so a tap shows at once. `onData(blocks, changed)`:
+  `changed` is false when only `confirmedAt` moved, so the echo of a write never redraws the page.
+- The page waits for every project's first blocks snapshot before it renders (`ready()`), so blocks
+  never flash as "missed" while loading.
+- Tested in the emulator (2026-09-30): mark writes the block, the mirror and the log; unmark reverses
+  all three; an outside wipe of `doneEvents` changes nothing on screen; an outside backfill-shaped
+  block shows as done; `partial` doesn't; a fresh backup is replayed, an 8-day-old one and another
+  account's are dropped; a half-typed form survives a `confirmedAt`-only change.
+
+## The tray and the block screen (v1.3, step 4)
+
+Rules from the user (2026-09-30); step 5 (RAG, gates rail) must follow them too:
+- **Unconfirmed is not failed.** Three states: confirmed (`done`/`partial`/`skipped`), awaiting (the
+  block has passed, no status), upcoming. RAG counts only confirmed blocks; awaiting blocks never turn
+  a stream yellow or red.
+- **The tray** (`trayView()`, first thing on the page): every past block with no status, newest first,
+  one tap each: done / partial / skipped. `weekView()` lists only today onward for that reason.
+- **Checklist: at most `MAX_CHECK` (4) items**; the add form disappears at 4 and the handler refuses a
+  fifth. "בוצע" in the block screen is enabled only with every item ticked; "בוצע" from a row (tray,
+  lists, "now") ticks them all in the same tap.
+- **Any status other than done requires a next action** (`askForm()`); the blocker is optional. The
+  stream card and the tray show the next action left by the stream's latest confirmed block
+  (`streamNext()`), until a later block of that stream is done.
+- **Rescheduling happens in the calendar, by hand.** The app never writes or proposes a change. On
+  confirming, the block records its `date`, `streamIds` and `title`, and they are never updated after.
+  A confirmed block whose event is gone or sits on another day is flagged (`orphans()`, computed, not
+  stored), never dropped or re-dated.
+- More block fields: `title`, `goal`, `deliverable`, `firstAction`, `dod`, `checklist: [{id, text,
+  done}]`, `timeboxMin` (the smaller of 90 and the event's length), `timeboxStopped`, `blocker`,
+  `nextAction`.
+- `fillFacts()` gives a copied-over block (no `date`) its day, stream and title the first time its
+  event is seen. It fills missing fields only and never sets a status.
+- `putBlock()` keeps this tab's pending copy (`p.over`) on top of snapshots until the server answers:
+  the snapshot of one write can land after the next tap and would undo it on screen (seen in testing:
+  every other checklist item was lost).
+
+## Gates and RAG (v1.3, step 5)
+
+- `gates/{gateId}`: `id`, `label`, `date`, `order`, `criteria: [{id, text, streamId | null, link |
+  null, met, metOn}]`. `streamId: null` is a criterion with no stream: it feeds no RAG. Every criterion
+  is ticked by hand in the gate's panel (`gate-met`), never automatically. `criticalPath/chain` is
+  seeded (`steps: [{key, label, done, doneAt}]`) and has no screen yet.
+- Streams (still the array in the project document) gained `critical`, `externalDependency: {open,
+  hasAlternative}`, `metrics: [{key, label, value, target}]` (no screen yet) and `rag: false` to leave
+  a stream out of RAG. A milestone with `rag: false` stays in the stream's list and is left out of
+  the progress numbers and the deadlines list (`counted()`).
+- **A block belongs to every stream its title matches**: `streamIds: string[]` on the block document,
+  read through `sids()` (which also accepts an older single `streamId`). Confirming credits all of
+  them in one tap.
+- `ragOf(stream, gate)`, per the user's rules: the window is after the previous gate's day through
+  the gate's day; only confirmed blocks are judged; deficit = confirmed blocks that weren't done
+  (partial or skipped); yellow at 1, red at 2 or more, or on an open external dependency with no
+  alternative; awaiting blocks are shown and never counted. Confirmed blocks count on their recorded
+  `date`, so moving calendar events never rewrites history. Habits and `rag: false` have no light.
+- The window resets at each gate: it is never cumulative. A block counts for exactly one gate.
+- `gateColor()`: the worst stream light in that gate's window; gates after the next one have none.
+- **A criterion can't be ticked met while the gate's window has awaiting blocks** (`gateWaiting()`:
+  every past, unconfirmed block of the project in the window, with or without a stream). The tick is
+  refused and the panel names the blocks (title, day, stream), so they can be cleared from the tray;
+  a count alone is not enough. The rail shows each gate's awaiting count next to its light. Unmarked
+  is still never failed, only not passable. With no calendar loaded since the page opened
+  (`cal.storedAt` is 0) the tick is refused too, because the awaiting blocks can't be known.
+  Unticking always works.
+- `criticalBanner()`: a critical stream that is red for the next gate. Display only.
+- firebase.js: `openSub(uid, projectId, name, handlers)` is the blocks listener generalised
+  (`openBlocks` calls it); gates use it too, with the same localStorage backup and replay.
+- Tests: `tests/seed-fake.json` has `gates` for the made-up Madrid project with `days` relative to
+  today; `tests/seed-in-page.js` turns them into dates.
+- Tested in the emulator (2026-09-30): awaiting blocks keep a stream green; one skipped block makes
+  it yellow; a partial two-stream block makes the critical stream red with the banner and the other
+  stream yellow; done on that block credits both; an open dependency with no alternative is red and
+  clears with an alternative; criteria ticks are saved with their day; habit and rag:false streams
+  show no light. The tick guard: refused before the calendar is connected; refused with two awaiting
+  blocks, both named, and "2 מחכים" on the rail; refused with one ("1 מחכה"); accepted once both are
+  confirmed, saved with its day; unticking works.
+
 ## Projects and the home screen (v1.2)
 
 - `app.js` keeps the artifact's views, which draw "the current project": `use(id)` points `state` and
@@ -202,7 +297,26 @@ Before the deploy, the real document was backed up to
 `~/Documents/projects-app-backup/madrid-field-trial-2026-09-27.json`, and `project.calendarKey: "מדריד"`
 was added to it in one approved, previewed write (only that field; verified field by field).
 
-**v1.3: week-grid task calendar inside the app.** A week grid showing only this project's calendar
-blocks, colored per stream. Done blocks faded with a check, missed blocks in red. Tapping a block
-shows its description, a "done" toggle and the Calendar link. Arrows move between weeks; RTL,
-mobile-first. Still read-only against Google Calendar; the done state stays in Firestore.
+**v1.3: "Gates & Blocks" (in progress, not released).** A management layer for the preparation up to
+the flight: gates, per-stream RAG, a block runner, the Thursday checkpoint. Decided 2026-09-30:
+- The app manages the **preparation only**. What happens at the destination lives in a separate app.
+- Streams stay the array inside the project document, extended in place; there is no streams
+  subcollection. **No stream id is ever hard-coded in code**: behavior comes from flags in the data
+  (`critical`, `status: "habit"`).
+- `blocks/{eventId}.status` is the only read source for "done" (see "Blocks").
+- Rules unchanged: the recursive match already covers the new subcollections
+  (`tests/rules-test.py` checks `gates`, `blocks`, `criticalPath`, `checkpoints`).
+- The calendar stays read-only. No tag until the user has checked the live site.
+
+**v1.4:**
+- **Remove the dual write to `doneEvents`** (`setDone()` in `app.js`, and the `doneEvents` branch of
+  `changesBetween()`/`withChanges()` in `firebase.js`), once the user has confirmed v1.3 is stable.
+  Don't remove it before that confirmation: `doneEvents` is the way back to v1.2.
+- **Decide whether to derive the critical-path chain from the gates.** `criticalPath/chain` repeats
+  what the gate criteria already say (each step is a criterion of some gate), so today the same fact
+  is ticked in two places. Nothing is built on the chain in v1.3 (no screen). Don't build one before
+  this is decided.
+- The week-grid task calendar (was planned as v1.3): a week grid showing only this project's calendar
+  blocks, colored per stream. Done blocks faded with a check, missed blocks in red. Tapping a block
+  shows its description, a "done" toggle and the Calendar link. Arrows move between weeks; RTL,
+  mobile-first. Still read-only against Google Calendar; the done state stays in Firestore.

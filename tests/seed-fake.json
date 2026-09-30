@@ -60,7 +60,12 @@
        "title": "לעדכן שכנים",
        "done": true
       }
-     ]
+     ],
+     "critical": true,
+     "externalDependency": {
+      "open": false,
+      "hasAlternative": false
+     }
     },
     {
      "id": "workaway",
@@ -77,7 +82,11 @@
        "title": "פרופיל מוכן",
        "done": false
       }
-     ]
+     ],
+     "externalDependency": {
+      "open": false,
+      "hasAlternative": false
+     }
     },
     {
      "id": "trip",
@@ -101,7 +110,11 @@
        "label": "אפליקציית התקציב",
        "url": "https://matankashi.github.io/madrid-trip/"
       }
-     ]
+     ],
+     "externalDependency": {
+      "open": false,
+      "hasAlternative": false
+     }
     },
     {
      "id": "spanish",
@@ -131,7 +144,11 @@
        "title": "לבדוק זכויות",
        "done": false
       }
-     ]
+     ],
+     "externalDependency": {
+      "open": false,
+      "hasAlternative": false
+     }
     },
     {
      "id": "field",
@@ -149,7 +166,8 @@
        "title": "באפר מתחיל",
        "done": false
       }
-     ]
+     ],
+     "rag": false
     }
    ]
   },
@@ -311,5 +329,65 @@
     }
    ]
   }
+ },
+ "gates": {
+  "_note": "date = today + days, set by tests/seed-in-page.js",
+  "fake-madrid": [
+   {
+    "id": "G1",
+    "label": "Launch",
+    "days": 1,
+    "order": 1,
+    "criteria": [
+     {
+      "id": "c1",
+      "text": "תמונות סופיות",
+      "streamId": "sublet",
+      "link": null,
+      "met": false,
+      "metOn": null
+     },
+     {
+      "id": "c2",
+      "text": "Workaway מוכן",
+      "streamId": "workaway",
+      "link": null,
+      "met": false,
+      "metOn": null
+     },
+     {
+      "id": "c3",
+      "text": "תקציב מטופל",
+      "streamId": null,
+      "link": null,
+      "met": false,
+      "metOn": null
+     }
+    ]
+   },
+   {
+    "id": "G2",
+    "label": "Midpoint",
+    "days": 5,
+    "order": 2,
+    "criteria": [
+     {
+      "id": "c1",
+      "text": "מחסן פונקציונלי",
+      "streamId": "sublet",
+      "link": null,
+      "met": false,
+      "metOn": null
+     }
+    ]
+   },
+   {
+    "id": "EXIT",
+    "label": "אריזה",
+    "days": 14,
+    "order": 3,
+    "criteria": []
+   }
+  ]
  }
 }

@@ -4,6 +4,8 @@
    the artifact kept inside its <script id="state"> tag, plus updatedAt set by the server.
    watchProjects() follows the list; openProject() follows and saves one document. Nothing here
    ever creates a project document: there's no import, so a deleted document stays deleted.
+   Since v1.3 a project's blocks are documents of their own, in the subcollection blocks/{eventId}:
+   see openBlocks() at the end of this file.
 
    How saving and syncing fit together (the echo risk madrid-trip's budget.js avoids with getDoc,
    handled here because the dashboard needs onSnapshot for cross-device sync):
@@ -26,7 +28,7 @@
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
-import { getFirestore, collection, doc, onSnapshot, writeBatch, serverTimestamp, deleteField, arrayUnion, arrayRemove, FieldPath } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
+import { getFirestore, collection, doc, onSnapshot, setDoc, writeBatch, serverTimestamp, deleteField, arrayUnion, arrayRemove, FieldPath } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js";
 import { firebaseConfig } from './firebase-config.js';
 
 const app = initializeApp(firebaseConfig);
@@ -334,5 +336,142 @@ export function openProject(uid, projectId, handlers) {
       clearTimeout(timer);
       unsubscribe();
     }
+  };
+}
+
+/* Blocks (v1.3): users/{uid}/projects/{projectId}/blocks/{eventId}, one document per calendar event,
+   created the first time the block is acted on. The calendar says when; everything else about a
+   block lives here, and `status` is the only place the app reads "done" from.
+
+   Each change is one setDoc with merge, sent right away (a block changes on a tap, not while typing),
+   so two devices acting on different blocks never touch the same document; on the same block, the
+   last write wins per field. The listener doesn't skip pending snapshots, so a change shows at once.
+
+   The unload problem of the project document applies here too (the browser cancels a write the page
+   starts while closing, and the in-memory cache forgets queued writes on a reload). So every change
+   is also kept in localStorage until the server has answered, and sent again on the next load. */
+export const SERVER_NOW = 'projects-app:server-now';   // a field value that means "the server's time"
+const subBackupKey = (uid, projectId, name) => 'projects-app:' + uid + ':' + projectId + ':' + name + ':pending';
+
+// handlers: onData(blocks, changed) with blocks as {eventId: fields} and changed false when only
+// confirmedAt moved (the server's time replacing the estimate); onError(err);
+// onSaveState('saving'|'saved'|'error', err)
+export const openBlocks = (uid, projectId, handlers) => openSub(uid, projectId, 'blocks', handlers);
+
+// The same listening, saving and backup for any subcollection of a project: `blocks`, and `gates`
+// (gates/{gateId}: label, date, order, and criteria that are ticked by hand).
+export function openSub(uid, projectId, name, handlers) {
+  const col = collection(projectRef(uid, projectId), name);
+  const pendingKey = subBackupKey(uid, projectId, name);
+  const writes = new Set();
+  let inFlight = 0;
+  let failure = null;
+  let replayed = false;
+  let lastKey = null;
+
+  function readBackup() {
+    let backup = null;
+    try {
+      backup = JSON.parse(localStorage.getItem(pendingKey) || 'null');
+    } catch (err) {
+      console.error('projects-app: unreadable ' + name + ' backup, ignoring it', err);
+    }
+    if (!backup || backup.uid !== uid || backup.projectId !== projectId || !backup.writes) return {};
+    return backup.writes;
+  }
+
+  function storeBackup(pending) {
+    try {
+      if (Object.keys(pending).length) localStorage.setItem(pendingKey, JSON.stringify({ uid, projectId, writes: pending }));
+      else localStorage.removeItem(pendingKey);
+    } catch (err) {
+      console.error('projects-app: could not back up an unsaved change to ' + name, err);
+    }
+  }
+
+  function send(eventId, fields, token) {
+    const data = {};
+    for (const [k, v] of Object.entries(fields)) data[k] = v === SERVER_NOW ? serverTimestamp() : v;
+    inFlight++;
+    handlers.onSaveState('saving');
+    const pending = setDoc(doc(col, eventId), data, { merge: true })
+      .catch(err => {
+        console.error('projects-app: saving to ' + name + ' failed', err);
+        failure = err;
+      })
+      .finally(() => {
+        inFlight--;
+        writes.delete(pending);
+        // Saved, or refused by the server (which a retry wouldn't change): nothing to keep, unless a
+        // newer change to the same block is still on its way.
+        const kept = readBackup();
+        if (kept[eventId] && kept[eventId].token === token) {
+          delete kept[eventId];
+          storeBackup(kept);
+        }
+        if (inFlight) return;
+        const failed = failure;
+        failure = null;
+        handlers.onSaveState(failed ? 'error' : 'saved', failed);
+      });
+    writes.add(pending);
+    return pending;
+  }
+
+  // Changes left unsaved when the page was last closed, at most 7 days old.
+  function replay() {
+    const kept = readBackup();
+    let dropped = false;
+    for (const [eventId, entry] of Object.entries(kept)) {
+      if (entry && entry.fields && Date.now() - entry.savedAt < BACKUP_MAX_AGE_MS) {
+        console.info('projects-app: saving a change to ' + name + ' left unsaved when the page was last closed');
+        send(eventId, entry.fields, entry.token);
+      } else {
+        delete kept[eventId];
+        dropped = true;
+      }
+    }
+    if (dropped) storeBackup(kept);
+  }
+
+  // Metadata changes are included so that an empty first answer from the cache (offline, nothing
+  // cached: no verdict yet) is followed by the server's answer even if that is empty too.
+  const unsubscribe = onSnapshot(col, { includeMetadataChanges: true }, snap => {
+    if (snap.metadata.fromCache && snap.empty && lastKey === null) return;
+    const blocks = {};
+    const stable = {};
+    snap.forEach(d => {
+      const data = d.data({ serverTimestamps: 'estimate' });
+      if (data.confirmedAt && typeof data.confirmedAt.toMillis === 'function') data.confirmedAt = data.confirmedAt.toMillis();
+      blocks[d.id] = data;
+      stable[d.id] = Object.assign({}, data, { confirmedAt: data.confirmedAt ? 1 : null });
+    });
+    const key = contentKey(stable, false);
+    const changed = key !== lastKey;
+    lastKey = key;
+    handlers.onData(blocks, changed);
+    if (!replayed) {
+      replayed = true;
+      replay();
+    }
+  }, err => {
+    console.error('projects-app: ' + name + ' listener failed', err);
+    handlers.onError(err);
+  });
+
+  return {
+    // Merges `fields` into blocks/{eventId}, creating it if needed.
+    set(eventId, fields) {
+      const kept = readBackup();
+      const token = Date.now() + ':' + Math.random().toString(36).slice(2);
+      kept[eventId] = { fields: Object.assign({}, (kept[eventId] || {}).fields, fields), savedAt: Date.now(), token };
+      storeBackup(kept);
+      return send(eventId, fields, token);   // settles when the server has answered; never rejects
+    },
+    discardBackup() { storeBackup({}); },
+    async wait(ms = 3000) {
+      await Promise.race([Promise.allSettled([...writes]), new Promise(resolve => setTimeout(resolve, ms))]);
+    },
+    close() { unsubscribe(); }
   };
 }

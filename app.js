@@ -5,7 +5,7 @@
    Since v1.2 there can be several projects. The artifact's views draw "the current project": use(id)
    points `state` and cal.blocks at one project before its views run, and every event handler first
    calls use() for the project its element belongs to (the nearest [data-p]). */
-import {watchAuth,signIn,signOutUser,watchProjects,openProject} from './firebase.js';
+import {watchAuth,signIn,signOutUser,watchProjects,openProject,openBlocks,openSub,SERVER_NOW} from './firebase.js';
 import * as gcal from './calendar.js';
 
 const LS_TIMER='madrid-dash-timer';
@@ -19,15 +19,18 @@ const STATUS={active:'פעיל',waiting:'ממתין',habit:'הרגל',stuck:'ת�
 const DAYS=['א׳','ב׳','ג׳','ד׳','ה׳','ו׳','ש׳'];
 const app=document.getElementById('app');
 
-const projects={};           // id -> {id, state, sync}; state is null until its first snapshot
+const projects={};           // id -> {id, state, sync, blocks, gates, syncs, snap, over}; state and blocks are null until their first snapshot
 let listed=null;             // project ids in the list, null until the list arrives
 let state=null;              // the current project's state (see use())
 let cur=null;                // the current project's id
+let blocks={};               // the current project's block documents, by calendar event id (v1.3)
+let gates={};                // the current project's gate documents, by gate id (v1.3)
 let route={name:'home'};     // #/ is home, #/p/<id> is one project
 let view='auth',viewMsg='';  // what render() shows until every listed project has arrived
 
 let ui={open:{},stuck:false,warn:null,showLog:false,exp:false,warnP:null,
-  editP:null,editSc:null,editMs:null,editLink:null,keyDraft:null,keyConfirm:null,confirmDel:null};  // editing (v1.2)
+  editP:null,editSc:null,editMs:null,editLink:null,keyDraft:null,keyConfirm:null,confirmDel:null,  // editing (v1.2)
+  run:null,ask:null,editPlan:false,gate:null,gateWarn:null};  // the open block {p,e}, the status being asked about {k,st,w}, its plan form (v1.3)
 
 let saveText='';
 
@@ -116,7 +119,7 @@ async function refreshCalendar(){
   if(t!=='valid'){calFail({kind:t==='expired'?'expired':'disconnected'});return;}
   calBusy=true;
   if(!cal.items.length){cal=Object.assign({},cal,{status:'loading'});render();}
-  try{const items=await gcal.listEvents(calRange());cal={status:'ok',items,blocks:[],msg:'',storedAt:Date.now()};render();}
+  try{const r=calRange(),items=await gcal.listEvents(r);cal={status:'ok',items,blocks:[],msg:'',storedAt:Date.now(),range:{from:iso(new Date(r.timeMin)),to:iso(new Date(r.timeMax))}};fillFacts();render();}
   catch(err){console.error('projects-app: calendar refresh failed',err);calFail(err);}
   finally{calBusy=false;}
 }
@@ -125,12 +128,71 @@ function startCalendar(){
   gcal.onExpire(()=>{if(cal.status==='ok'||cal.status==='network'){cal=Object.assign({},cal,{status:'expired',msg:CAL_MSG.expired});render();}});
   setInterval(()=>{if(gcal.tokenState()==='valid')refreshCalendar();},600000);
 }
-const isDone=b=>!!state.doneEvents[b.id];
+/* A block is done only when it was confirmed in the app: blocks/{eventId}.status, never the clock. */
+const CONFIRMED=['done','partial','skipped'];
+const ST={done:['בוצע','done'],partial:['חלקי','saffron'],skipped:['דילגתי','calm']};   // label, chip color
+const blk=id=>blocks[id]||{};
+/* A block belongs to every stream its title matches (streamIds). streamId is the v1.3-draft single value. */
+const sids=k=>Array.isArray(k.streamIds)?k.streamIds:k.streamId?[k.streamId]:[];
+const isDone=b=>blk(b.id).status==='done';
+const isConfirmed=b=>CONFIRMED.includes(blk(b.id).status);
 const blocksOf=id=>cal.blocks.filter(b=>b.streams.includes(id));
-const missedBlocks=()=>{const n=Date.now();return cal.blocks.filter(b=>b.end<=n&&!isDone(b));};
+/* Past blocks with no status are waiting for me to say what happened. They are not "behind". */
+const awaiting=()=>{const n=Date.now();return cal.blocks.filter(b=>b.end<=n&&!isConfirmed(b));};
+/* What a stream's latest confirmed block left behind: its next action, unless that block was done. */
+function streamNext(sid){
+  if(!sid)return null;
+  const day=k=>k.date||k.confirmedOn||'';
+  const last=Object.values(blocks).filter(k=>sids(k).includes(sid)&&CONFIRMED.includes(k.status)).sort((a,b)=>day(a)<day(b)?1:day(a)>day(b)?-1:0)[0];
+  return last&&last.status!=='done'&&last.nextAction?last:null;
+}
+/* A confirmed block keeps its record whatever happens to its event. When the event is gone from the
+   calendar, or now sits on another day, the record is flagged here: never dropped, never moved.
+   Checked only inside the dates the calendar was loaded for. */
+function orphans(){
+  if(cal.status!=='ok'||!cal.range)return [];
+  const ev=new Map(cal.blocks.map(b=>[b.id,b]));
+  return Object.entries(blocks).map(([id,k])=>Object.assign({},k,{eventId:id}))
+    .filter(k=>CONFIRMED.includes(k.status)&&k.date&&k.date>cal.range.from&&k.date<cal.range.to)
+    .filter(k=>{const b=ev.get(k.eventId);return !b||iso(b.start)!==k.date;});
+}
+
+/* Gates and RAG (v1.3, step 5).
+   A stream's light is about the window of one gate: after the previous gate's day, through the gate's
+   own day. Only confirmed blocks are judged: the deficit is the confirmed blocks that weren't done
+   (partial or skipped). A past block with no status is "awaiting": shown, never counted against the
+   stream. Red: a deficit of 2 or more, or an open external dependency with no alternative. Yellow: 1.
+   A confirmed block counts on the day recorded when it was confirmed, in every stream it belongs to,
+   whatever happened to its calendar event since. Habits and rag:false streams have no light. */
+const RAG={green:['ירוק','ontrack'],yellow:['צהוב','late'],red:['אדום','behind']};
+const inRag=s=>s.status!=='habit'&&s.rag!==false;
+const counted=s=>s.milestones.filter(m=>m.rag!==false);   // rag:false milestones stay visible and don't count
+const gateList=()=>Object.entries(gates).map(([id,g])=>Object.assign({},g,{id})).filter(g=>/^\d{4}-\d{2}-\d{2}$/.test(g.date||'')).sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:(a.order||0)-(b.order||0));
+const nextGate=()=>gateList().find(g=>g.date>=iso(today()))||null;
+const gateWin=g=>{const all=gateList(),i=all.findIndex(x=>x.id===g.id),from=i>0?all[i-1].date:'';return d=>d>from&&d<=g.date;};
+/* A gate can't be passed while blocks in its window are still awaiting: unmarked is never failed, and
+   never passable either. Every block of the project counts, with or without a stream. */
+const gateWaiting=g=>{const inW=gateWin(g),n=Date.now();return cal.blocks.filter(b=>b.end<=n&&!isConfirmed(b)&&inW(iso(b.start)));};
+function ragOf(s,g){
+  if(!g||!inRag(s))return null;
+  const inW=gateWin(g),n=Date.now();
+  const recs=Object.values(blocks).filter(k=>CONFIRMED.includes(k.status)&&k.date&&inW(k.date)&&sids(k).includes(s.id));
+  const open=cal.blocks.filter(b=>!isConfirmed(b)&&b.streams.includes(s.id)&&inW(iso(b.start)));
+  const done=recs.filter(k=>k.status==='done').length,deficit=recs.length-done,wait=open.filter(b=>b.end<=n).length;
+  const dep=s.externalDependency,blocked=!!(dep&&dep.open&&!dep.hasAlternative),planned=recs.length+open.length;
+  return {color:blocked||deficit>=2?'red':deficit===1?'yellow':planned?'green':null,planned,confirmed:recs.length,done,deficit,wait,blocked};
+}
+const ragText=r=>!r.planned&&!r.blocked?'אין בלוקים בחלון':`${r.done} מתוך ${r.planned} בלוקים בוצעו${r.deficit?` · ${r.deficit} לא הושלמו`:''}${r.wait?` · ${r.wait} מחכים לסימון`:''}${r.blocked?' · תלות חיצונית פתוחה בלי חלופה':''}`;
+/* A gate's light: the worst of its streams. Gates after the next one have no light yet. */
+function gateColor(g){
+  const next=nextGate();if(next&&g.date>next.date)return null;
+  const cs=state.streams.filter(inRag).map(s=>ragOf(s,g).color);
+  return cs.includes('red')?'red':cs.includes('yellow')?'yellow':cs.includes('green')?'green':null;
+}
+const dot=c=>`<span class="rag-dot ${c||'none'}" role="img" aria-label="${c?RAG[c][0]:'בלי נורית'}"></span>`;
 
 /* projects */
-function use(id){const p=projects[id];cur=id;state=p.state;cal.blocks=state?toBlocks({items:cal.items}):[];}
+function use(id){const p=projects[id];cur=id;state=p.state;blocks=p.blocks||{};gates=p.gates||{};cal.blocks=state?toBlocks({items:cal.items}):[];}
 const loadedIds=()=>(listed||[]).filter(id=>projects[id]&&projects[id].state);
 const isPaused=id=>projects[id].state.project.status==='paused';
 const activeIds=()=>loadedIds().filter(id=>!isPaused(id));
@@ -152,19 +214,65 @@ window.addEventListener('pagehide',()=>eachSync(s=>s.flush()));
 /* timer */
 const getTimer=()=>{try{return JSON.parse(localStorage.getItem(LS_TIMER)||'null');}catch(e){return null;}};
 const setTimer=t=>{try{t?localStorage.setItem(LS_TIMER,JSON.stringify(t)):localStorage.removeItem(LS_TIMER);}catch(e){}};
-function tick(){const el=document.getElementById('timer');const t=getTimer();if(!el||!t)return;
+function tick(){const t=getTimer();if(!t)return;
   const left=t.start+t.minutes*60000-Date.now();
-  if(left>0){const m=Math.floor(left/60000),s=Math.floor(left%60000/1000);el.textContent=m+':'+String(s).padStart(2,'0');el.classList.remove('over');}
-  else{el.textContent='הזמן נגמר. מה הושלם, ומה נשאר?';el.classList.add('over');}}
+  document.querySelectorAll('.timer').forEach(el=>{
+    if(left>0){const m=Math.floor(left/60000),s=Math.floor(left%60000/1000);el.textContent=m+':'+String(s).padStart(2,'0');el.classList.remove('over');}
+    else{el.textContent='הזמן נגמר. מה הושלם, ומה נשאר?';el.classList.add('over');}});}
 setInterval(tick,1000);
 
 /* actions on blocks */
-function setDone(id,on){
-  const b=cal.blocks.find(x=>x.id===id);
-  if(on){state.doneEvents[id]=iso(today());if(b)state.log.push({d:iso(today()),t:b.title,s:b.streams[0]||'',e:id});}
+/* The block's own document carries the status. doneEvents gets a copy of "done" only: it is written
+   and never read, as the way back to v1.2, and goes away in v1.4 (see CLAUDE.md).
+   A status is only ever set by a tap here. Nothing marks a block by itself. */
+const TIMEBOX=90,MAX_CHECK=4;
+const facts=b=>b?{date:iso(b.start),streamIds:b.streams.slice(),title:b.title}:{};
+const born=(was,b)=>was.timeboxMin?{}:{timeboxMin:b?Math.min(TIMEBOX,mins(b)):TIMEBOX};
+/* Until the server has answered, this tab's copy of the block (p.over) wins over incoming snapshots:
+   the snapshot of one write can land after the next tap, and would otherwise undo it on screen. */
+function putDoc(kind,id,fields,local){
+  const p=projects[cur],over=p.over[kind];
+  over[id]={n:((over[id]||{}).n||0)+1,doc:Object.assign({},p[kind][id],fields,local)};
+  p[kind]=Object.assign({},p[kind],{[id]:over[id].doc});point(p);
+  p.syncs[kind].set(id,fields).then(()=>{
+    if(projects[p.id]!==p||!over[id]||--over[id].n)return;
+    delete over[id];p[kind]=withOver(p,kind);point(p);
+  });
+}
+const putBlock=(id,fields,local)=>putDoc('blocks',id,fields,local);
+const withOver=(p,kind)=>{const o=Object.assign({},p.snap[kind]);Object.keys(p.over[kind]).forEach(id=>{o[id]=p.over[kind][id].doc;});return o;};
+const point=p=>{if(cur===p.id){blocks=p.blocks||{};gates=p.gates||{};}};
+/* status: done, partial, skipped, or planned to take a confirmation back. The day, stream and title
+   are recorded from the calendar at the moment of confirming and are not touched again. "done" ticks
+   the whole checklist, so it is one tap from any row. */
+function confirmBlock(id,status,extra){
+  const b=cal.blocks.find(x=>x.id===id),day=iso(today()),was=blk(id),on=status!=='planned';
+  const fields=Object.assign({eventId:id,status},on?{confirmedOn:day,confirmedAt:SERVER_NOW}:{confirmedOn:null,confirmedAt:null},
+    on&&!CONFIRMED.includes(was.status)?facts(b):{},born(was,b),status==='done'?{nextAction:null,blocker:null}:{},extra);
+  if(status==='done'&&(was.checklist||[]).length)fields.checklist=was.checklist.map(c=>Object.assign({},c,{done:true}));
+  putBlock(id,fields,on?{confirmedAt:Date.now()}:{});
+  if(status==='done'){if(was.status!=='done'){state.doneEvents[id]=day;if(b)state.log.push({d:day,t:b.title,s:b.streams[0]||'',e:id});}}
   else{delete state.doneEvents[id];state.log=state.log.filter(x=>x.e!==id);}
   const t=getTimer();if(on&&t&&t.event===id)setTimer(null);
+  ui.ask=null;
   commit();
+}
+const setDone=(id,on)=>confirmBlock(id,on?'done':'planned');
+/* Everything else about a block (its plan, checklist, time-box): only the block's own document. */
+function saveBlock(id,fields){
+  const b=cal.blocks.find(x=>x.id===id),was=blk(id);
+  putBlock(id,Object.assign(was.status?{}:Object.assign({eventId:id,status:'planned'},facts(b)),born(was,b),fields));
+  render();
+}
+/* A confirmed block that has no day yet (one copied over from doneEvents) gets its day, stream and
+   title from the calendar the first time its event is seen. Only missing fields are filled. */
+function fillFacts(){
+  const keep=cur;
+  loadedIds().forEach(id=>{const p=projects[id];if(!p.blocks)return;use(id);
+    cal.blocks.forEach(b=>{const k=p.blocks[b.id];if(!k||!CONFIRMED.includes(k.status)||k.date)return;
+      const f={date:iso(b.start)};if(!sids(k).length)f.streamIds=b.streams.slice();if(!k.title)f.title=b.title;
+      putBlock(b.id,f);});});
+  if(keep&&projects[keep]&&projects[keep].state)use(keep);
 }
 
 /* views */
@@ -180,32 +288,33 @@ function countdown(P){
   if(P.decision&&P.decision.date)return `<span class="count-n">${daysUntil(P.decision.date)}</span><span>ימים לנקודת ההחלטה</span>`;
   return '';
 }
-/* A stream at a glance: the calendar-based numbers of progress(), or milestones when it has no blocks. */
+/* A stream at a glance: how much of its calendar is done (or of its milestones, when it has no blocks),
+   colored by its RAG light for the next gate. */
 function streamPace(s){
-  const n=Date.now(),bl=blocksOf(s.id);
-  if(bl.length){const done=bl.filter(isDone).length,behind=bl.filter(b=>b.end<=n&&!isDone(b)).length;return {pct:Math.round(done/bl.length*100),cls:behind>0?'behind':'ontrack',note:behind>0?(behind===1?'בלוק אחד מאחור':behind+' בלוקים מאחור'):'בזמן'};}
-  const mt=s.milestones.length;if(!mt)return {pct:0,cls:'none',note:'אין בלוקים ביומן'};
-  return {pct:Math.round(s.milestones.filter(m=>m.done).length/mt*100),cls:'none',note:'אין בלוקים ביומן'};
+  const bl=blocksOf(s.id),ms=counted(s),r=ragOf(s,nextGate());
+  const pct=bl.length?Math.round(bl.filter(isDone).length/bl.length*100):ms.length?Math.round(ms.filter(m=>m.done).length/ms.length*100):0;
+  if(!r||!r.color)return {pct,cls:'none',note:bl.length?'בלי נורית':'אין בלוקים ביומן'};
+  return {pct,cls:RAG[r.color][1],note:RAG[r.color][0]+': '+ragText(r)};
 }
 /* The project overview: the page's top panel, or a card on the home screen when card is true.
    A card is one link to the project, so nothing inside it is interactive. */
 function overview(card){
   const P=state.project,n=Date.now(),id=esc(cur);
-  const ms=state.streams.flatMap(s=>s.milestones),md=ms.filter(m=>m.done).length;
+  const ms=state.streams.flatMap(counted),md=ms.filter(m=>m.done).length;
   const pct=ms.length?Math.round(md/ms.length*100):0;
   const ws=weekStart(),we=new Date(ws);we.setDate(we.getDate()+7);
   const wb=cal.blocks.filter(b=>b.start>=ws&&b.start<we);
   const week=cal.items.length||cal.status==='ok'?`<p class="ov-week">השבוע: ${wb.filter(isDone).length} מתוך ${wb.length} בלוקים</p>`:'';
   const dl=allOpen()[0];
-  const nb=cal.blocks.find(b=>b.end>n&&!isDone(b));
-  const missed=missedBlocks().length;
+  const nb=cal.blocks.find(b=>b.end>n&&!isConfirmed(b));
+  const missed=awaiting().length;
   const c=countdown(P);
   const tile=(lbl,val)=>`<div class="ov-tile"><span class="ov-lbl">${lbl}</span>${val}</div>`;
   const tiles=[
     tile('התקדמות',`<div class="prog" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="אבני דרך שהושלמו"><div class="prog-bar"><div class="prog-fill" style="width:${pct}%"></div></div><span class="prog-n">${pct}%</span></div><p class="ov-sub">אבני דרך: ${md} מתוך ${ms.length}</p>${week}`),
     tile('הדד־ליין הבא',dl?`<span class="ov-val">${esc(dl.m.title)}</span><p class="ov-sub"><span class="chip ${urg(daysUntil(dl.m.date))}">${rel(daysUntil(dl.m.date))}</span> ${fmt(dl.m.date)}</p>`:'<span class="ov-val muted">אין דד־ליינים פתוחים</span>'),
     tile('הבלוק הבא',nb?`<span class="ov-val">${esc(nb.title)}</span><p class="ov-sub">${esc(nb.start<=n?'עכשיו, עד '+hm(nb.end):whenLabel(nb))}</p>`:`<span class="ov-val muted">${cal.items.length?'אין בלוקים עתידיים':'היומן לא נטען'}</span>`),
-    tile('לא סומנו',`<span class="ov-val${missed?' ov-red':''}">${missed?(missed===1?'בלוק אחד עבר ולא סומן':missed+' בלוקים עברו ולא סומנו'):'הכול מסומן'}</span>${missed&&!card?'<p class="ov-sub"><a href="#week">לסמן מה בוצע</a></p>':''}`)
+    tile('מחכים לסימון',`<span class="ov-val">${missed?(missed===1?'בלוק אחד מחכה לסימון':missed+' בלוקים מחכים לסימון'):'הכול מסומן'}</span>${missed&&!card?'<p class="ov-sub"><a href="#tray">לסמן מה קרה</a></p>':''}`)
   ].join('');
   const rows=state.streams.map(s=>{const p=streamPace(s);const inner=`<span class="ovs-n">${esc(s.name)}</span><span class="ovs-bar"><span class="ovs-fill ${p.cls}" style="width:${p.pct}%"></span></span><span class="ovs-p ${p.cls}">${p.pct}%</span>`;
     return card?`<li class="ovs" title="${esc(p.note)}">${inner}</li>`:`<li><a class="ovs" href="#st-${esc(s.id)}" title="${esc(p.note)}" aria-label="${esc(s.name)}: ${p.pct}%, ${esc(p.note)}">${inner}</a></li>`;}).join('');
@@ -216,11 +325,11 @@ function overview(card){
 /* Today's blocks from every active project, each with its done toggle. */
 function todayView(){
   const act=activeIds(),n=Date.now(),t0=today(),t1=today();t1.setDate(t1.getDate()+1);
-  const items=[];act.forEach(id=>{use(id);cal.blocks.filter(b=>b.start>=t0&&b.start<t1).forEach(b=>items.push({id,b,done:isDone(b),proj:state.project.name}));});
+  const items=[];act.forEach(id=>{use(id);cal.blocks.filter(b=>b.start>=t0&&b.start<t1).forEach(b=>items.push({id,b,done:isDone(b),st:ST[blk(b.id).status],proj:state.project.name}));});
   items.sort((x,y)=>x.b.start-y.b.start);
   const multi=act.length>1;
-  const list=items.map(({id,b,done,proj})=>{const missed=!done&&b.end<=n;
-    return `<li class="${done?'done':''}${missed?' missed':''}" data-p="${esc(id)}"><label><input type="checkbox" data-act="ev-toggle" data-e="${esc(b.id)}"${done?' checked':''}><span class="wk-time">${hm(b.start)}</span><span class="wk-t">${esc(b.title)}</span></label>${multi?`<span class="wk-s">${esc(proj)}</span>`:''}${b.link?`<a class="wk-cal" href="${esc(b.link)}" target="_blank" rel="noopener">פתח ביומן</a>`:''}${missed?'<span class="chip red">עבר ולא סומן</span>':''}</li>`;}).join('');
+  const list=items.map(({id,b,done,proj,st})=>{const wait=!st&&b.end<=n;
+    return `<li class="${done?'done':''}" data-p="${esc(id)}"><label><input type="checkbox" data-act="ev-toggle" data-e="${esc(b.id)}"${done?' checked':''}><span class="wk-time">${hm(b.start)}</span><span class="wk-t">${esc(b.title)}</span></label>${multi?`<span class="wk-s">${esc(proj)}</span>`:''}${b.link?`<a class="wk-cal" href="${esc(b.link)}" target="_blank" rel="noopener">פתח ביומן</a>`:''}${st&&!done?`<span class="chip ${st[1]}">${st[0]}</span>`:''}${wait?'<span class="chip calm">מחכה לסימון</span>':''}<button class="b-link wk-open" data-act="run" data-e="${esc(b.id)}">פתח</button></li>`;}).join('');
   const empty=cal.status==='loading'?'טוען את הלו״ז מהיומן…':cal.items.length||cal.status==='ok'?'אין בלוקים היום.':(CAL_TITLE[cal.status]||'')+'. '+(cal.msg||'');
   return `<section class="sec today-strip" aria-labelledby="today-h"><div class="sec-head"><h2 id="today-h">היום</h2>${cal.status==='ok'?'':calButton('b-link')}</div>
   <div class="wk">${items.length?`<div class="wk-day"><ul>${list}</ul></div>`:`<p class="muted">${esc(empty)}</p>`}</div></section>`;
@@ -291,6 +400,12 @@ function saveLink(form,s,label,url){
   else (s.links=s.links||[]).push(link);
   ui.editLink=null;commit();
 }
+/* An open dependency on someone else, with no alternative, makes the stream red whatever its blocks say. */
+function depEditor(s){
+  if(!inRag(s))return '';
+  const d=s.externalDependency||{};
+  return `<div class="st-links-edit st-dep"><h4>תלות חיצונית</h4><label><input type="checkbox" data-act="dep" data-k="open" data-s="${esc(s.id)}"${d.open?' checked':''}> יש תלות חיצונית פתוחה</label><label><input type="checkbox" data-act="dep" data-k="hasAlternative" data-s="${esc(s.id)}"${d.hasAlternative?' checked':''}> יש חלופה</label></div>`;
+}
 function linksEditor(s){
   const L=s.links||[];
   const rows=L.map((l,i)=>ui.editLink===eKey(s.id,i)
@@ -299,15 +414,87 @@ function linksEditor(s){
   return `<div class="st-links-edit"><h4>קישורים</h4>${L.length?`<ul class="ed-list">${rows}</ul>`:''}
   <form class="form" data-form="link-add" data-s="${esc(s.id)}" novalidate><input name="label" maxlength="${MAX_LEN.label}" placeholder="שם הקישור" aria-label="שם הקישור החדש"><input name="url" type="url" dir="ltr" maxlength="${MAX_LEN.url}" placeholder="https://" aria-label="כתובת הקישור החדש"><button class="b-sec">הוסף קישור</button><p class="warn form-err" role="alert" hidden></p></form></div>`;
 }
+/* The block screens (v1.3). */
+const PLAN=[['goal','מטרה'],['deliverable','תוצר'],['firstAction','פעולה ראשונה'],['dod','Definition of Done']];
+/* Any status other than "done" has to leave the next physical step behind. */
+function askForm(id,where){
+  const a=ui.ask;if(!a||a.k!==eKey(id)||a.w!==where)return '';
+  return `<form class="form bk-ask" data-form="bk-status" data-e="${esc(id)}" data-st="${a.st}"><input name="next" required maxlength="${MAX_LEN.text}" placeholder="הצעד הפיזי הבא (חובה)" aria-label="הצעד הבא"><input name="blocker" maxlength="${MAX_LEN.text}" placeholder="מה חסם?" aria-label="חסם"><button class="b-sec">שמור: ${ST[a.st][0]}</button><button type="button" class="b-link" data-act="edit-cancel">ביטול</button></form>`;
+}
+/* The catch-up tray: every past block with no status, newest first, one tap each. */
+function trayView(ids){
+  const rows=[];ids.forEach(id=>{use(id);awaiting().forEach(b=>rows.push({id,b,proj:state.project.name,nm:names(b),na:b.streams.map(streamNext).find(Boolean)}));});
+  if(!rows.length)return '';
+  rows.sort((x,y)=>y.b.start-x.b.start);
+  const multi=ids.length>1;
+  return `<section class="sec tray" id="tray" aria-labelledby="tray-h"><h2 id="tray-h">עוד לא סומנו (${rows.length})</h2><ul class="tray-list">${rows.map(({id,b,proj,nm,na})=>{use(id);const e=esc(b.id);
+    return `<li data-p="${esc(id)}"><div class="tray-main"><span class="wk-t">${esc(b.title)}</span><span class="wk-s">${esc(whenLabel(b))}${nm?' · '+esc(nm):''}${multi?' · '+esc(proj):''}</span>${na?`<span class="tray-na">הצעד הבא שנשאר: ${esc(na.nextAction)}</span>`:''}</div>
+    <div class="tray-acts"><button class="b-sec" data-act="bk-done" data-e="${e}">בוצע</button><button class="b-sec alt" data-act="bk-ask" data-w="tray" data-st="partial" data-e="${e}">חלקי</button><button class="b-sec alt" data-act="bk-ask" data-w="tray" data-st="skipped" data-e="${e}">דילגתי</button><button class="b-link" data-act="run" data-e="${e}">פתח</button></div>${askForm(b.id,'tray')}</li>`;}).join('')}</ul></section>`;
+}
+function orphansView(ids){
+  const rows=[];ids.forEach(id=>{use(id);orphans().forEach(k=>rows.push({id,k}));});
+  if(!rows.length)return '';
+  return `<details class="sec orphans"><summary>סומנו, והאירוע נמחק או הוזז ביומן (${rows.length})</summary><p class="muted">הרישום נשמר כמו שהוא. שום דבר לא נמחק ולא מחושב מחדש.</p><ul class="ed-list">${rows.map(({id,k})=>`<li data-p="${esc(id)}"><span class="ed-t">${esc(k.title||'בלוק')}</span><span class="chip ${ST[k.status][1]}">${ST[k.status][0]}</span><span class="ms-d">${fmt(k.date)}</span><button class="b-link" data-act="run" data-e="${esc(k.eventId)}">פתח</button></li>`).join('')}</ul></details>`;
+}
+/* One block: its plan, a checklist of at most MAX_CHECK items, the time-box, and the status.
+   "בוצע" is available only when the whole checklist is ticked; otherwise it's "חלקי". */
+function runnerView(ids){
+  const r=ui.run;if(!r||!ids.includes(r.p)||!projects[r.p]||!projects[r.p].state)return '';
+  use(r.p);
+  const id=r.e,e=esc(id),k=blk(id),b=cal.blocks.find(x=>x.id===id),conf=CONFIRMED.includes(k.status);
+  const list=k.checklist||[],all=list.every(c=>c.done);
+  const tb=k.timeboxMin||(b?Math.min(TIMEBOX,mins(b)):TIMEBOX),t=getTimer(),running=t&&t.event===id;
+  const orphan=orphans().some(o=>o.eventId===id);
+  const hasPlan=PLAN.some(([f])=>k[f]);
+  const plan=ui.editPlan||!hasPlan
+    ?`<form class="run-plan" data-form="bk-plan" data-e="${e}">${PLAN.map(([f,l])=>`<label>${l}<input name="${f}" value="${esc(k[f]||'')}" maxlength="${MAX_LEN.text}"></label>`).join('')}<div class="f-row"><button class="b-sec">שמור</button>${hasPlan?'<button type="button" class="b-link" data-act="plan-edit">ביטול</button>':''}</div></form>`
+    :`<dl class="run-dl">${PLAN.filter(([f])=>k[f]).map(([f,l])=>`<dt>${l}</dt><dd>${esc(k[f])}</dd>`).join('')}</dl><button class="b-link" data-act="plan-edit">עריכה</button>`;
+  const checks=`<h3>צ׳קליסט</h3>${list.length?`<ul class="ed-list run-ck">${list.map((c,i)=>`<li><label><input type="checkbox" data-act="ck-toggle" data-e="${e}" data-i="${i}"${c.done?' checked':''}><span>${esc(c.text)}</span></label>${delButton(eKey('ck',id,i),'ck-del',`data-e="${e}" data-i="${i}"`,'מחק: '+esc(c.text))}</li>`).join('')}</ul>`:''}
+  ${list.length<MAX_CHECK?`<form class="form" data-form="ck-add" data-e="${e}"><input name="text" required maxlength="${MAX_LEN.title}" placeholder="פריט לצ׳קליסט" aria-label="פריט חדש"><button class="b-sec">הוסף</button></form>`:`<p class="muted">עד ${MAX_CHECK} פריטים. צריך יותר? אלה שני בלוקים.</p>`}`;
+  const timer=conf?'':`<div class="run-acts">${running?'<div class="timer" aria-live="polite"></div>':''}<button class="b-sec alt" data-act="timer" data-e="${e}" data-min="${tb}">${running?'עצור טיימר':`התחל ${tb} דק׳`}</button><button class="b-sec alt" data-act="tb-stop" data-e="${e}"${k.timeboxStopped?' disabled':''}>${k.timeboxStopped?`נעצר ב־${tb} ✓`:`עצרתי ב־${tb}`}</button></div>`;
+  // A time is shown only for a confirmation made in the app; a copied-over one has only its day.
+  const when=conf&&k.confirmedOn?`אושר ב־${fmt(k.confirmedOn)}${k.confirmedAt?', '+hm(new Date(k.confirmedAt)):''}`:'';
+  const status=conf
+    ?`<div class="run-acts"><span class="chip ${ST[k.status][1]}">${ST[k.status][0]}</span><span class="muted">${when}${k.timeboxStopped?` · נעצר ב־${tb}`:''}</span><button class="b-link" data-act="bk-undo" data-e="${e}">בטל סימון</button></div>${k.status!=='done'&&k.nextAction?`<p class="run-na"><b>הצעד הבא:</b> ${esc(k.nextAction)}</p>`:''}${k.status!=='done'&&k.blocker?`<p class="muted">חסם: ${esc(k.blocker)}</p>`:''}`
+    :`<div class="run-acts"><button class="b-sec" data-act="bk-done" data-e="${e}"${all?'':' disabled'}>בוצע</button><button class="b-sec alt" data-act="bk-ask" data-w="run" data-st="partial" data-e="${e}">חלקי</button><button class="b-sec alt" data-act="bk-ask" data-w="run" data-st="skipped" data-e="${e}">דילגתי</button></div>${all?'':'<p class="muted">"בוצע" נפתח כשכל הצ׳קליסט מסומן. אחרת: חלקי, עם הצעד הבא.</p>'}${askForm(id,'run')}`;
+  return `<section class="sec run" id="runner" data-p="${esc(r.p)}" aria-labelledby="run-h"><div class="sec-head"><h2 id="run-h">${esc(b?b.title:k.title||'בלוק')}</h2><button class="b-link" data-act="run-close">סגור</button></div>
+  <p class="muted">${b?esc(whenLabel(b))+', '+mins(b)+' דק׳'+(names(b)?' · '+esc(names(b)):''):k.date?fmt(k.date):''}</p>
+  ${orphan?'<p class="warn">האירוע נמחק או הוזז ביומן. הרישום נשמר כמו שהוא.</p>':!b?'<p class="muted">האירוע לא נמצא ביומן שנטען.</p>':''}
+  ${plan}${checks}${timer}${status}</section>`;
+}
+/* The critical stream is red: the fixed banner. The app only says so; it never touches the calendar. */
+function criticalBanner(ids){
+  const out=[];ids.forEach(id=>{use(id);const g=nextGate();state.streams.filter(s=>s.critical&&inRag(s)).forEach(s=>{const r=ragOf(s,g);if(r&&r.color==='red')out.push(`<p class="crit" role="alert"><b>ה־Critical Path בפיגור.</b> 90 הדקות הבאות עוברות ל${esc(s.name)}.</p>`);});});
+  return out.join('');
+}
+/* The gates rail: every gate with its light, the next one marked. A tap opens its criteria (ticked by
+   hand, never automatically) and each stream's state in that gate's window. */
+function gatesView(){
+  const all=gateList();if(!all.length)return '';
+  const next=nextGate(),open=ui.gate&&ui.gate.p===cur?all.find(g=>g.id===ui.gate.g):null;
+  const head=next?`<p class="gate-next">הגייט הבא: <b>${esc(next.id)}${next.label?' · '+esc(next.label):''}</b> <span class="chip ${urg(daysUntil(next.date))}">${rel(daysUntil(next.date))}</span> <span class="ms-d">${fmt(next.date)}</span></p>`:'<p class="gate-next muted">כל הגייטים עברו.</p>';
+  const rail=all.map(g=>`<li><button class="gate${next&&g.id===next.id?' cur':''}${open&&open.id===g.id?' open':''}" data-act="gate" data-g="${esc(g.id)}" aria-expanded="${!!(open&&open.id===g.id)}"${next&&g.id===next.id?' aria-current="step"':''}>${dot(gateColor(g))}<span class="gate-id">${esc(g.id)}</span><span class="gate-d">${fmt(g.date)}</span>${gateWaiting(g).length?`<span class="gate-w">${gateWaiting(g).length===1?'1 מחכה':gateWaiting(g).length+' מחכים'}</span>`:''}</button></li>`).join('');
+  let panel='';
+  if(open){
+    const crit=(open.criteria||[]).map((c,i)=>{const st=c.streamId?S(c.streamId):null,u=c.link&&isUrl(String(c.link.url||''))?c.link:null;
+      return `<li><label><input type="checkbox" data-act="gate-met" data-g="${esc(open.id)}" data-i="${i}"${c.met?' checked':''}><span>${esc(c.text)}</span></label><span class="wk-s">${st?esc(st.name):'בלי מסלול, נבדק ידנית'}${c.met&&c.metOn?' · סומן ב־'+fmt(c.metOn):''}</span>${u?`<a class="wk-cal" href="${esc(u.url)}" target="_blank" rel="noopener">${esc(u.label||u.url)}</a>`:''}</li>`;}).join('');
+    const rows=state.streams.filter(inRag).map(s=>{const r=ragOf(s,open);return `<li>${dot(r.color)}<span class="ed-t">${esc(s.name)}</span><span class="wk-s">${ragText(r)}</span></li>`;}).join('');
+    const wait=gateWaiting(open),refused=ui.gateWarn&&ui.gateWarn.p===cur&&ui.gateWarn.g===open.id;
+    const hold=!cal.storedAt?(refused?'<p class="warn" role="alert">אי אפשר לסמן קריטריון לפני שהיומן נטען: אי אפשר לדעת אילו בלוקים מחכים לסימון. חבר יומן ונסה שוב.</p>':'')
+      :wait.length?`<div class="gate-hold${refused?' warn':''}"${refused?' role="alert"':''}><p>${refused?'אי אפשר לסמן קריטריון: ':''}${wait.length===1?'בלוק אחד בחלון של הגייט מחכה':wait.length+' בלוקים בחלון של הגייט מחכים'} לסימון. סמן ${wait.length===1?'אותו':'אותם'} במגש "עוד לא סומנו":</p><ul>${wait.map(b=>`<li>${esc(b.title)} · ${fmt(iso(b.start))}${names(b)?' · '+esc(names(b)):''}</li>`).join('')}</ul></div>`:'';
+    panel=`<div class="gate-panel"><h3>${esc(open.id)}${open.label?' · '+esc(open.label):''} <span class="ms-d">${fmt(open.date)}</span></h3>${hold}${crit?`<ul class="ed-list run-ck">${crit}</ul>`:'<p class="muted">אין קריטריונים לגייט הזה.</p>'}<h4>המסלולים בחלון של הגייט</h4><ul class="ed-list">${rows}</ul></div>`;
+  }
+  return `<section class="sec gates" aria-labelledby="gates-h"><h2 id="gates-h">גייטים</h2>${head}<div class="gate-scroll"><ol class="gate-rail">${rail}</ol></div>${panel}</section>`;
+}
 /* One project's full page: the overview panel, then the artifact's dashboard. */
-function projectPage(extra){return `<div data-p="${esc(cur)}">${overview(false)}${ui.editP===cur?editPanel():''}${extra||''}${nowView()}${weekView()}${streams()}${upcoming()}${timeline()}${logView()}${rulesView()}</div>`;}
+function projectPage(extra){return `<div data-p="${esc(cur)}">${overview(false)}${ui.editP===cur?editPanel():''}${gatesView()}${extra||''}${nowView()}${weekView()}${streams()}${upcoming()}${timeline()}${logView()}${rulesView()}</div>`;}
 /* Cards: the nearest open deadline first, projects without one last, ties by name. */
 const nextDeadline=id=>{use(id);const o=allOpen()[0];return o?o.m.date:'9999-12-31';};
 function byDeadline(a,b){const x=nextDeadline(a),y=nextDeadline(b);return x<y?-1:x>y?1:projects[a].state.project.name.localeCompare(projects[b].state.project.name,'he');}
 /* Home: today across projects, then the one active project's full page, or a card per active project. */
 function homeView(){
   const act=activeIds();
-  let h=bar(false)+todayView();
+  let h=bar(false)+trayView(act)+orphansView(act)+criticalBanner(act)+runnerView(act)+todayView();
   if(act.length===1){use(act[0]);h+=projectPage(pausedView());}
   else{h+=act.length?`<section class="cards sec" aria-label="פרויקטים פעילים">${act.slice().sort(byDeadline).map(id=>{use(id);return overview(true);}).join('')}</section>`:'<p class="muted sec">אין פרויקטים פעילים.</p>';h+=pausedView();}
   return h;
@@ -317,9 +504,9 @@ function nowView(){
   if(cal.status==='loading')return `<section class="now"><div class="now-head"><span class="now-tag">הבלוק הבא</span></div><h2 class="now-title">טוען את הלו״ז מהיומן…</h2></section>`;
   if(!cal.blocks.length)return `<section class="now"><div class="now-head"><span class="now-tag">הבלוק הבא</span></div><h2 class="now-title">${cal.status==='ok'?`אין בלוקים של ${esc(state.project.calendarKey||state.project.name)} ביומן`:CAL_TITLE[cal.status]}</h2><p class="now-meta">${esc(cal.msg||'')}</p><div class="now-actions">${calButton('b-light')}</div></section>`;
   const n=Date.now();
-  const b=cal.blocks.find(x=>x.start<=n&&x.end>n&&!isDone(x))||cal.blocks.find(x=>x.start>n&&!isDone(x));
-  const missed=missedBlocks();
-  const missedLine=missed.length?`<p class="now-missed">${missed.length===1?'בלוק אחד עבר ולא סומן':missed.length+' בלוקים עברו ולא סומנו'}. <a href="#week">לסמן מה בוצע</a></p>`:'';
+  const b=cal.blocks.find(x=>x.start<=n&&x.end>n&&!isConfirmed(x))||cal.blocks.find(x=>x.start>n&&!isConfirmed(x));
+  const missed=awaiting();
+  const missedLine=missed.length?`<p class="now-missed">${missed.length===1?'בלוק אחד מחכה לסימון':missed.length+' בלוקים מחכים לסימון'}. <a href="#tray">לסמן מה קרה</a></p>`:'';
   if(!b)return `<section class="now"><div class="now-head"><span class="now-tag">הבלוק הבא</span></div><h2 class="now-title">אין עוד בלוקים עתידיים ביומן</h2>${missedLine}</section>`;
   const live=b.start<=n,t=getTimer(),running=t&&t.event===b.id;
   return `<section class="now" aria-labelledby="now-h">
@@ -332,6 +519,7 @@ function nowView(){
   <div class="now-actions">
     <button class="b-light" data-act="timer" data-e="${esc(b.id)}" data-min="${mins(b)}">${running?'עצור טיימר':'התחל טיימר '+mins(b)+' דק׳'}</button>
     <button class="b-light" data-act="ev-done" data-e="${esc(b.id)}">בוצע</button>
+    <button class="b-ghost" data-act="run" data-e="${esc(b.id)}">פתח את הבלוק</button>
     <button class="b-ghost" data-act="stuck-ask">נתקעתי</button>
     ${b.link?`<a class="b-ghost" href="${esc(b.link)}" target="_blank" rel="noopener">פתח ביומן</a>`:''}
   </div>
@@ -342,14 +530,14 @@ function nowView(){
 function weekView(){
   if(!cal.blocks.length)return '';
   const n=Date.now(),end=today();end.setDate(end.getDate()+7);
-  const items=cal.blocks.filter(b=>(b.end<=n&&!isDone(b))||(b.start>=today()&&b.start<end));
+  const items=cal.blocks.filter(b=>b.start>=today()&&b.start<end);   // past blocks with no status are in the tray
   const note=cal.status==='ok'?`מסונכרן עם Google Calendar, עודכן ב־${hm(new Date(cal.storedAt||Date.now()))}`:`${esc(cal.msg)} מוצג הלו״ז שנטען ב־${hm(new Date(cal.storedAt))}.`;
   const groups=[];items.forEach(b=>{const k=iso(b.start);let g=groups.find(x=>x.k===k);if(!g){g={k,d:b.start,list:[]};groups.push(g);}g.list.push(b);});
   return `<section class="sec" id="week"><div class="sec-head"><h2>הלו״ז הקרוב ביומן</h2>${calButton('b-link')}</div><p class="cal-note">${note}</p>
-  <div class="wk">${groups.map(g=>`<div class="wk-day"><h3>${esc(dayLabel(g.d))}${dayLabel(g.d).startsWith('יום')?'':` <span class="muted">${DAYS[g.d.getDay()]} ${g.d.getDate()}.${g.d.getMonth()+1}</span>`}</h3><ul>${g.list.map(b=>{const done=isDone(b),missed=!done&&b.end<=n;
-    return `<li class="${done?'done':''}${missed?' missed':''}"><label><input type="checkbox" data-act="ev-toggle" data-e="${esc(b.id)}"${done?' checked':''}><span class="wk-time">${hm(b.start)}</span><span class="wk-t">${esc(b.title)}</span></label><span class="wk-s">${esc(names(b))}</span>${b.link?`<a class="wk-cal" href="${esc(b.link)}" target="_blank" rel="noopener">פתח ביומן</a>`:''}${missed?'<span class="chip red">עבר ולא סומן</span>':''}</li>`;}).join('')}</ul></div>`).join('')||'<p class="muted">אין בלוקים בשבוע הקרוב.</p>'}</div></section>`;
+  <div class="wk">${groups.map(g=>`<div class="wk-day"><h3>${esc(dayLabel(g.d))}${dayLabel(g.d).startsWith('יום')?'':` <span class="muted">${DAYS[g.d.getDay()]} ${g.d.getDate()}.${g.d.getMonth()+1}</span>`}</h3><ul>${g.list.map(b=>{const done=isDone(b),st=ST[blk(b.id).status],wait=!st&&b.end<=n;
+    return `<li class="${done?'done':''}"><label><input type="checkbox" data-act="ev-toggle" data-e="${esc(b.id)}"${done?' checked':''}><span class="wk-time">${hm(b.start)}</span><span class="wk-t">${esc(b.title)}</span></label><span class="wk-s">${esc(names(b))}</span>${b.link?`<a class="wk-cal" href="${esc(b.link)}" target="_blank" rel="noopener">פתח ביומן</a>`:''}${st&&!done?`<span class="chip ${st[1]}">${st[0]}</span>`:''}${wait?'<span class="chip calm">מחכה לסימון</span>':''}<button class="b-link wk-open" data-act="run" data-e="${esc(b.id)}">פתח</button></li>`;}).join('')}</ul></div>`).join('')||'<p class="muted">אין בלוקים בשבוע הקרוב.</p>'}</div></section>`;
 }
-function allOpen(){const a=[];state.streams.forEach(s=>s.milestones.forEach(m=>{if(!m.done&&m.date)a.push({m,s});}));return a.sort((x,y)=>byDate(x.m,y.m));}
+function allOpen(){const a=[];state.streams.forEach(s=>counted(s).forEach(m=>{if(!m.done&&m.date)a.push({m,s});}));return a.sort((x,y)=>byDate(x.m,y.m));}
 function upcoming(){
   const items=allOpen().slice(0,5);
   if(!items.length)return '';
@@ -380,20 +568,21 @@ function timeline(){
   ${P.decision?'<div class="tl-mark decide" style="inset-inline-start:100%"><span>החלטה</span></div>':''}
   ${dots}${ticks}</div></div></section>`;
 }
+function ragLine(s){
+  const g=nextGate(),r=ragOf(s,g);
+  return r?`<p class="prog-meta rag-line">${dot(r.color)}<span>עד ${esc(g.id)} (${fmt(g.date)}): ${ragText(r)}</span></p>`:'';
+}
 function progress(s){
-  const n=Date.now(),md=s.milestones.filter(m=>m.done).length,mt=s.milestones.length;
+  const ms=counted(s),md=ms.filter(m=>m.done).length,mt=ms.length;
   const bl=blocksOf(s.id);
   if(!bl.length){
-    if(!mt)return '';
+    if(!mt)return ragLine(s);
     const pct=Math.round(md/mt*100);
-    return `<div class="prog" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="התקדמות ${esc(s.name)}"><div class="prog-bar"><div class="prog-fill" style="width:${pct}%"></div></div><span class="prog-n">${pct}%</span></div><p class="prog-meta">אבני דרך: ${md} מתוך ${mt}</p>`;
+    return `<div class="prog" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="התקדמות ${esc(s.name)}"><div class="prog-bar"><div class="prog-fill" style="width:${pct}%"></div></div><span class="prog-n">${pct}%</span></div><p class="prog-meta">אבני דרך: ${md} מתוך ${mt}</p>${ragLine(s)}`;
   }
-  const done=bl.filter(isDone).length,exp=bl.filter(b=>b.end<=n).length,total=bl.length;
-  const pct=Math.round(done/total*100),ep=Math.round(exp/total*100);
-  const behind=exp-bl.filter(b=>b.end<=n&&isDone(b)).length;
-  const pace=behind>0?`<span class="behind">${behind===1?'בלוק אחד מאחור':behind+' בלוקים מאחור'}</span>`:'<span class="ontrack">בזמן</span>';
-  return `<div class="prog" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="התקדמות ${esc(s.name)}"><div class="prog-bar"><div class="prog-fill" style="width:${pct}%"></div>${exp&&exp<total?`<span class="prog-exp" style="inset-inline-start:${ep}%" title="איפה היית אמור להיות לפי היומן"></span>`:''}</div><span class="prog-n">${pct}%</span></div>
-  <p class="prog-meta">${done} מתוך ${total} בלוקים ביומן. ${pace}${mt?`. אבני דרך: ${md} מתוך ${mt}`:''}</p>`;
+  const done=bl.filter(isDone).length,total=bl.length,pct=Math.round(done/total*100);
+  return `<div class="prog" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="התקדמות ${esc(s.name)}"><div class="prog-bar"><div class="prog-fill" style="width:${pct}%"></div></div><span class="prog-n">${pct}%</span></div>
+  <p class="prog-meta">${done} מתוך ${total} בלוקים ביומן${mt?`. אבני דרך: ${md} מתוך ${mt}`:''}</p>${ragLine(s)}`;
 }
 /* Per-stream links live in the document: streams[].links = [{label, url}]. Only http(s) addresses
    become links; anything else is skipped with one warning per address. */
@@ -409,7 +598,8 @@ function streamView(s){
   const open=!!ui.open[s.id],n=Date.now();
   const ms=s.milestones.slice().sort((a,b)=>(a.done-b.done)||byDate(a,b));
   const shown=open?ms:ms.filter(m=>!m.done).slice(0,2);
-  const nb=blocksOf(s.id).find(b=>b.end>n&&!isDone(b));
+  const nb=blocksOf(s.id).find(b=>b.end>n&&!isConfirmed(b)),na=streamNext(s.id);
+  const left=na?`<div class="st-next st-na"><span class="lbl">הצעד הבא שנשאר:</span><span class="t">${esc(na.nextAction)}</span>${na.blocker?`<span class="mins">חסם: ${esc(na.blocker)}</span>`:''}</div>`:'';
   const next=cal.blocks.length?`<div class="st-next"><span class="lbl">הבלוק הבא:</span>${nb?`<span class="t">${esc(nb.title)}</span><span class="mins">${esc(whenLabel(nb))}, ${mins(nb)} דק׳</span>`:'<span class="t">אין בלוקים עתידיים ביומן</span>'}</div>`:'';
   let habit='';
   if(s.habit&&cal.blocks.length){
@@ -420,15 +610,15 @@ function streamView(s){
   }
   const list=shown.length?`<ul class="ms">${shown.map(m=>{const d=m.date?daysUntil(m.date):null;
     if(open&&ui.editMs===eKey(s.id,m.id))return `<li><form class="form" data-form="ms-edit" data-s="${s.id}" data-m="${m.id}"><input name="title" value="${esc(m.title)}" required maxlength="${MAX_LEN.title}" aria-label="שם אבן הדרך"><input name="date" type="date" value="${esc(m.date||'')}" aria-label="תאריך"><button class="b-sec">שמור</button><button type="button" class="b-link" data-act="edit-cancel">ביטול</button></form></li>`;
-    return `<li class="${m.done?'done':''}"><label><input type="checkbox" data-act="ms-toggle" data-s="${s.id}" data-m="${m.id}"${m.done?' checked':''}><span class="ms-t">${esc(m.title)}</span></label>${m.date?(m.done?`<span class="ms-d">${fmt(m.date)}</span>`:`<span class="ms-d">${fmt(m.date)}</span><span class="chip ${urg(d)}">${rel(d)}</span>`):''}${open?`${ui.confirmDel===eKey('ms',s.id,m.id)?'':`<button class="b-link ms-ed" data-act="ms-edit" data-s="${s.id}" data-m="${m.id}" aria-label="עריכה: ${esc(m.title)}">עריכה</button>`}${delButton(eKey('ms',s.id,m.id),'ms-del',`data-s="${s.id}" data-m="${m.id}"`,'מחק')}`:''}</li>`;}).join('')}</ul>`:'';
+    return `<li class="${m.done?'done':''}"><label><input type="checkbox" data-act="ms-toggle" data-s="${s.id}" data-m="${m.id}"${m.done?' checked':''}><span class="ms-t">${esc(m.title)}</span></label>${m.rag===false?'<span class="chip calm">לא נספר</span>':''}${m.date?(m.done?`<span class="ms-d">${fmt(m.date)}</span>`:`<span class="ms-d">${fmt(m.date)}</span><span class="chip ${urg(d)}">${rel(d)}</span>`):''}${open?`${ui.confirmDel===eKey('ms',s.id,m.id)?'':`<button class="b-link ms-ed" data-act="ms-edit" data-s="${s.id}" data-m="${m.id}" aria-label="עריכה: ${esc(m.title)}">עריכה</button>`}${delButton(eKey('ms',s.id,m.id),'ms-del',`data-s="${s.id}" data-m="${m.id}"`,'מחק')}`:''}</li>`;}).join('')}</ul>`:'';
   const moreBtn=(ms.length>shown.length||open)?`<button class="b-link more" data-act="more" data-s="${s.id}">${open?'פחות':`כל אבני הדרך (${ms.length})`}</button>`:(!ms.length&&!s.habit?`<button class="b-link more" data-act="more" data-s="${s.id}">הוסף אבן דרך</button>`:'');
-  const add=open?`<form class="form" data-form="add-ms" data-s="${s.id}"><input name="title" required maxlength="${MAX_LEN.title}" placeholder="אבן דרך חדשה"><input name="date" type="date" aria-label="תאריך"><button class="b-sec">הוסף</button></form>${linksEditor(s)}`:'';
+  const add=open?`<form class="form" data-form="add-ms" data-s="${s.id}"><input name="title" required maxlength="${MAX_LEN.title}" placeholder="אבן דרך חדשה"><input name="date" type="date" aria-label="תאריך"><button class="b-sec">הוסף</button></form>${depEditor(s)}${linksEditor(s)}`:'';
   return `<article class="st st-${s.status}" id="st-${esc(s.id)}">
-  <div class="st-head"><h3>${esc(s.name)}</h3><div class="st-tools">
+  <div class="st-head"><h3>${inRag(s)&&nextGate()?dot(ragOf(s,nextGate()).color):''}${esc(s.name)}${s.critical?' <span class="chip calm">Critical</span>':''}</h3><div class="st-tools">
     <select class="st-status" data-act="status" data-s="${s.id}" aria-label="סטטוס">${Object.keys(STATUS).map(k=>`<option value="${k}"${k===s.status?' selected':''}>${STATUS[k]}</option>`).join('')}</select>
     ${s.habit?'':`<button class="tog" data-act="heavy" data-s="${s.id}" aria-pressed="${!!s.heavy}">מוקד כבד</button>`}
     <button class="b-link st-edit" data-act="more" data-s="${s.id}" aria-expanded="${open}">${open?'סיום עריכה':'עריכה'}</button>
-  </div></div>${streamLinks(s)}${progress(s)}${next}${habit}${list}${moreBtn}${add}</article>`;
+  </div></div>${streamLinks(s)}${progress(s)}${left}${next}${habit}${list}${moreBtn}${add}</article>`;
 }
 function streams(){
   const h=state.streams.filter(s=>s.heavy).length;
@@ -459,12 +649,12 @@ const BOOT={auth:'טוען…',loading:'טוען את הנתונים…',offline
 function bootView(){
   return `<section class="sec boot" aria-live="polite"><h2>${BOOT[view]}</h2>${viewMsg?`<p class="muted">${esc(viewMsg)}</p>`:''}${view==='empty'||view==='error'?'<button class="b-link out" data-act="signout">התנתקות</button>':''}</section>`;
 }
-const ready=()=>listed!==null&&listed.length>0&&view!=='error'&&listed.every(id=>projects[id]&&projects[id].state);
+const ready=()=>listed!==null&&listed.length>0&&view!=='error'&&listed.every(id=>projects[id]&&projects[id].state&&projects[id].blocks);
 function readRoute(){const m=location.hash.match(/^#\/p\/([^/]+)$/);route=m?{name:'project',id:decodeURIComponent(m[1])}:{name:'home'};}
 function render(){
   if(!ready()){app.innerHTML=view==='login'?loginView():bootView();return;}
   const p=route.name==='project'&&projects[route.id];
-  if(p){use(route.id);app.innerHTML=bar(true)+projectPage();}
+  if(p){const top=trayView([route.id])+orphansView([route.id])+criticalBanner([route.id])+runnerView([route.id]);use(route.id);app.innerHTML=bar(true)+top+projectPage();}
   else app.innerHTML=homeView();
   tick();
 }
@@ -486,7 +676,16 @@ app.addEventListener('click',e=>{
   switch(a){
     case 'timer':{const t=getTimer();if(t&&t.event===id)setTimer(null);else setTimer({start:Date.now(),minutes:+b.dataset.min||30,event:id});render();break;}
     case 'ev-done':setDone(id,true);break;
-    case 'ev-flip':setDone(id,!state.doneEvents[id]);break;
+    case 'ev-flip':setDone(id,!isDone({id}));break;
+    case 'run':ui.run={p:cur,e:id};ui.ask=null;ui.editPlan=false;render();{const el=document.getElementById('runner');if(el)el.scrollIntoView({block:'start'});}break;
+    case 'gate':ui.gateWarn=null;ui.gate=ui.gate&&ui.gate.p===cur&&ui.gate.g===b.dataset.g?null:{p:cur,g:b.dataset.g};render();break;
+    case 'run-close':ui.run=null;ui.ask=null;render();break;
+    case 'bk-done':confirmBlock(id,'done');break;
+    case 'bk-ask':ui.ask={k:eKey(id),st:b.dataset.st==='skipped'?'skipped':'partial',w:b.dataset.w};render();focusIn('.bk-ask input');break;
+    case 'bk-undo':confirmBlock(id,'planned');break;
+    case 'plan-edit':ui.editPlan=!ui.editPlan;render();break;
+    case 'tb-stop':{const t=getTimer();if(t&&t.event===id)setTimer(null);saveBlock(id,{timeboxStopped:true});break;}
+    case 'ck-del':{const i=+b.dataset.i,l=(blk(id).checklist||[]).slice();if(l[i]&&confirmDel(eKey('ck',id,i))){l.splice(i,1);saveBlock(id,{checklist:l});}break;}
     case 'stuck-ask':ui.stuck=true;render();const el=app.querySelector('form[data-form="stuck"] input');if(el)el.focus();break;
     case 'cancel':ui.stuck=false;render();break;
     case 'refresh':refreshCalendar();break;
@@ -499,7 +698,7 @@ app.addEventListener('click',e=>{
     case 'log':ui.showLog=!ui.showLog;render();break;
     case 'export':ui.exp=!ui.exp;render();break;
     case 'edit-project':ui.editP=ui.editP===cur?null:cur;ui.editSc=null;ui.keyDraft=null;ui.keyConfirm=null;ui.warnP=null;render();break;
-    case 'edit-cancel':ui.editSc=ui.editMs=ui.editLink=null;render();break;
+    case 'edit-cancel':ui.editSc=ui.editMs=ui.editLink=ui.ask=null;render();break;
     case 'sc-edit':ui.editSc=eKey(+b.dataset.i);render();focusIn('[data-form="sc-edit"] input');break;
     case 'sc-del':{const sc=state.project.success||[],i=+b.dataset.i;if(sc[i]!==undefined&&confirmDel(eKey('sc',i))){sc.splice(i,1);ui.editSc=null;commit();}break;}
     case 'ms-edit':if(m){ui.editMs=eKey(s.id,m.id);render();focusIn('[data-form="ms-edit"] input');}break;
@@ -514,6 +713,12 @@ app.addEventListener('change',e=>{
   if(a==='status'){s.status=t.value;commit();}
   else if(a==='ms-toggle'){const m=s.milestones.find(x=>x.id===t.dataset.m);if(m){m.done=t.checked;commit();}}
   else if(a==='ev-toggle')setDone(t.dataset.e,t.checked);
+  else if(a==='dep'){if(s&&(t.dataset.k==='open'||t.dataset.k==='hasAlternative')){s.externalDependency=Object.assign({open:false,hasAlternative:false},s.externalDependency,{[t.dataset.k]:t.checked});commit();}}
+  else if(a==='gate-met'){const g=gates[t.dataset.g],cr=g&&(g.criteria||[]).map(c=>Object.assign({},c)),c=cr&&cr[+t.dataset.i];if(c){
+    // Ticking is refused while the gate's window has awaiting blocks, or when the calendar was never loaded (unknown). Unticking always works.
+    if(t.checked&&(!cal.storedAt||gateWaiting(Object.assign({},g,{id:t.dataset.g})).length)){ui.gateWarn={p:cur,g:t.dataset.g};render();return;}
+    ui.gateWarn=null;c.met=t.checked;c.metOn=t.checked?iso(today()):null;putDoc('gates',t.dataset.g,{criteria:cr});render();}}
+  else if(a==='ck-toggle'){const l=(blk(t.dataset.e).checklist||[]).map(c=>Object.assign({},c)),c=l[+t.dataset.i];if(c){c.done=t.checked;saveBlock(t.dataset.e,{checklist:l});}}
 });
 // The calendar key's match count updates while typing, in place, so the field keeps its focus.
 app.addEventListener('input',e=>{
@@ -535,6 +740,9 @@ app.addEventListener('submit',e=>{
     case 'key':saveKey(f,v('key'));return;
     case 'ms-edit':{const m=s&&s.milestones.find(x=>x.id===f.dataset.m);if(m&&v('title')){m.title=v('title').slice(0,MAX_LEN.title);m.date=isDate(v('date'))?v('date'):null;ui.editMs=null;commit();}return;}
     case 'link-add':case 'link-edit':if(s)saveLink(f,s,v('label'),v('url'));return;
+    case 'bk-status':if(v('next'))confirmBlock(f.dataset.e,f.dataset.st==='skipped'?'skipped':'partial',{nextAction:v('next').slice(0,MAX_LEN.text),blocker:v('blocker').slice(0,MAX_LEN.text)||null});return;
+    case 'bk-plan':{const o={};PLAN.forEach(([k])=>{o[k]=v(k).slice(0,MAX_LEN.text)||null;});ui.editPlan=false;saveBlock(f.dataset.e,o);return;}
+    case 'ck-add':{const l=(blk(f.dataset.e).checklist||[]).slice();if(v('text')&&l.length<MAX_CHECK){l.push({id:uid(),text:v('text').slice(0,MAX_LEN.title),done:false});saveBlock(f.dataset.e,{checklist:l});}return;}
   }
   const title=String(d.get('title')||'').trim();if(!title)return;
   if(f.dataset.form==='stuck'){state.stuck[f.dataset.e]=title;ui.stuck=false;}
@@ -560,8 +768,8 @@ function login(d){
   });
 }
 async function signOut(){
-  try{await Promise.all(Object.values(projects).filter(p=>p.sync).map(p=>p.sync.flushAndWait()));}catch(e){console.error('projects-app: saving before sign-out failed',e);}
-  eachSync(s=>s.discardBackup());  // nothing of this account's data stays in the browser
+  try{await Promise.all(Object.values(projects).filter(p=>p.sync).flatMap(p=>[p.sync.flushAndWait(),...Object.values(p.syncs).map(x=>x.wait())]));}catch(e){console.error('projects-app: saving before sign-out failed',e);}
+  eachSync(s=>s.discardBackup());Object.values(projects).forEach(p=>Object.values(p.syncs).forEach(x=>x.discardBackup()));  // nothing of this account's data stays in the browser
   try{await signOutUser();}catch(e){console.error('projects-app: sign-out failed',e);}
   location.reload();
 }
@@ -581,13 +789,23 @@ function showError(err){view='error';viewMsg=(err&&err.code==='permission-denied
 // Opens a listener for each new project in the list and closes the ones that left it.
 function syncList(userId,ids){
   listed=ids.slice();
-  ids.forEach(id=>{if(projects[id])return;const p=projects[id]={id,state:null,sync:null};
+  ids.forEach(id=>{if(projects[id])return;const p=projects[id]={id,state:null,sync:null,blocks:null,gates:null,syncs:{},snap:{},over:{blocks:{},gates:{}}};
     p.sync=openProject(userId,id,{
       onData:data=>{data.doneEvents=data.doneEvents||{};data.stuck=data.stuck||{};if(!loadedIds().length)setStatus('נשמר בענן');p.state=data;if(cur===id)state=data;render();},
       onMissing:()=>dropProject(id),   // deleted: drop it, never recreate it
       onOffline:()=>{},
       onError:showError,
       onSaveState:saveStateOf(id)
+    });
+    p.syncs.blocks=openBlocks(userId,id,{
+      onData:(b,changed)=>{const first=!p.blocks;p.snap.blocks=b;p.blocks=withOver(p,'blocks');point(p);if(first)fillFacts();if(first||changed)render();},   // no redraw for the echo of a write
+      onError:showError,
+      onSaveState:saveStateOf(id+'/blocks')
+    });
+    p.syncs.gates=openSub(userId,id,'gates',{
+      onData:(g,changed)=>{p.snap.gates=g;p.gates=withOver(p,'gates');point(p);if(changed)render();},
+      onError:showError,
+      onSaveState:saveStateOf(id+'/gates')
     });});
   Object.keys(projects).forEach(id=>{if(!ids.includes(id))dropProject(id);});
   if(!ids.length&&view!=='error')view='empty';
@@ -595,7 +813,7 @@ function syncList(userId,ids){
 }
 function dropProject(id){
   const p=projects[id];if(!p)return;
-  p.sync.close();delete projects[id];delete saveStates[id];
+  p.sync.close();Object.values(p.syncs).forEach(x=>x.close());delete projects[id];delete saveStates[id];delete saveStates[id+'/blocks'];delete saveStates[id+'/gates'];
   if(listed)listed=listed.filter(x=>x!==id);
   if(cur===id){cur=null;state=null;}
   if(listed&&!listed.length&&view!=='error')view='empty';

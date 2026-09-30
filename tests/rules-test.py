@@ -61,8 +61,11 @@ own = 'users/%s/projects/madrid-field-trial' % OWNER
 own_list = 'users/%s/projects' % OWNER
 theirs = 'users/%s/projects/p' % OTHER
 outside = 'misc/doc'
+# v1.3: the subcollections under a project. The recursive match in firestore.rules covers them.
+SUBS = ['gates/G1', 'blocks/event-1', 'criticalPath/chain', 'checkpoints/2026-10-01']
+theirs_sub = theirs + '/blocks/event-1'
 
-for path in (own, theirs, outside):
+for path in [own, theirs, outside, theirs_sub] + [own + '/' + s for s in SUBS]:
     if call('PATCH', path, ADMIN) != 200:
         sys.exit('could not seed %s in the emulator' % path)
 
@@ -84,7 +87,26 @@ CASES = [
     ('owner: write another user', 'PATCH', theirs, OWNER, DENIED),
     ('owner: read outside /users', 'GET', outside, OWNER, DENIED),
     ('owner: write outside /users', 'PATCH', outside, OWNER, DENIED),
+    ('other account: read its own sub-doc', 'GET', theirs_sub, OTHER, DENIED),
+    ('other account: write its own sub-doc', 'PATCH', theirs_sub, OTHER, DENIED),
+    ('owner: read another user\'s sub-doc', 'GET', theirs_sub, OWNER, DENIED),
+    ('owner: write another user\'s sub-doc', 'PATCH', theirs_sub, OWNER, DENIED),
 ]
+for sub in SUBS:
+    path, coll = own + '/' + sub, own + '/' + sub.split('/')[0]
+    CASES += [
+        ('signed out: read %s' % sub, 'GET', path, None, DENIED),
+        ('signed out: write %s' % sub, 'PATCH', path, None, DENIED),
+        ('signed out: list %s' % sub.split('/')[0], 'GET', coll, None, DENIED),
+        ('other account: read %s' % sub, 'GET', path, OTHER, DENIED),
+        ('other account: write %s' % sub, 'PATCH', path, OTHER, DENIED),
+        ('other account: list %s' % sub.split('/')[0], 'GET', coll, OTHER, DENIED),
+        ('other account: delete %s' % sub, 'DELETE', path, OTHER, DENIED),
+        ('owner: read %s' % sub, 'GET', path, OWNER, OK),
+        ('owner: write %s' % sub, 'PATCH', path, OWNER, OK),
+        ('owner: list %s' % sub.split('/')[0], 'GET', coll, OWNER, OK),
+        ('owner: delete %s' % sub, 'DELETE', path, OWNER, OK),
+    ]
 
 print('Owner UID from firestore.rules: %s' % OWNER)
 failed = 0
@@ -92,7 +114,7 @@ for name, method, path, who, expected in CASES:
     got = call(method, path, who)
     ok = got == expected
     failed += not ok
-    print('%s  %-40s %-6s -> %d%s' % ('PASS' if ok else 'FAIL', name, method, got,
+    print('%s  %-48s %-6s -> %d%s' % ('PASS' if ok else 'FAIL', name, method, got,
                                       '' if ok else '  (expected %d)' % expected))
 print('\n%d of %d passed' % (len(CASES) - failed, len(CASES)))
 sys.exit(1 if failed else 0)
