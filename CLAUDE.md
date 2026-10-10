@@ -20,6 +20,11 @@ Standing rules from the user, for every session:
 3. **Security first.** Least privilege, no secrets in the repo, read-only calendar, UID-locked rules.
    Flag anything that would weaken them, even if it's convenient.
 4. **Show before anything irreversible.** Show the user exactly what will change first.
+5. **One font: Arial, no web fonts.** A standing preference for all the user's apps, not a one-off:
+   `'Arial','Arial Hebrew',Helvetica,sans-serif` everywhere, unless the user says otherwise. No
+   Google Fonts or other web font links, no second face for headings or display text, no light
+   weights. Hierarchy comes from size and weight (400/600/700) only. Set 2026-10-10, when Assistant,
+   Suez One and Frank Ruhl Libre were removed.
 
 Repo conventions:
 
@@ -195,9 +200,9 @@ that way.
   fewer layers, each skip warned once), never a blocked page.
 - **Home only**, between the app bar and the tray (`compassView()`). Folded on every load: one line,
   the first layer, about 90 px at 390 px wide, so the tray stays the first actionable thing. Open is a
-  separate surface (warm paper tokens `--cp-*`, edge to edge, Frank Ruhl Libre, no borders, chips or
-  tiles). The open state is kept in `ui.compassOpen` (a capture-phase `toggle` listener), because
-  every snapshot redraws the page.
+  separate surface (warm paper tokens `--cp-*`, edge to edge, no borders, chips or tiles; Arial like
+  the rest of the app, with the layer sizes and line heights tuned for it). The open state is kept in
+  `ui.compassOpen` (a capture-phase `toggle` listener), because every snapshot redraws the page.
 - **`project.compass`**: the project's answer to "איך הפרויקט הזה מקדם את הכיוון שלי?", a string,
   shown under the goal on the card and the panel (`whyView()`), edited in "עריכה" (`data-form="why"`).
   Saved as part of `project` (whole field, last write wins). Ends trimmed, CRLF to LF, cut to

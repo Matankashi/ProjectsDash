@@ -20,8 +20,8 @@
 }
 html{scroll-padding-top:env(safe-area-inset-top,0px)}
 *,*::before,*::after{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--ink);font-family:'Assistant',system-ui,'Segoe UI',Arial,sans-serif;font-size:17px;line-height:1.55}
-h1,h2,h3{font-family:'Suez One','Assistant',Georgia,serif;font-weight:400;margin:0;line-height:1.2}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:'Arial','Arial Hebrew',Helvetica,sans-serif;font-size:17px;line-height:1.55}
+h1,h2,h3{font-weight:700;margin:0;line-height:1.2}
 button,input,select,textarea{font:inherit;color:inherit}
 button{cursor:pointer}
 :focus-visible{outline:3px solid var(--cobalt);outline-offset:2px}
@@ -34,7 +34,7 @@ button{cursor:pointer}
 .save{font-size:.85rem;color:var(--muted)}
 .goal{margin:6px 0 10px;color:var(--muted);max-width:60ch}
 .count{display:inline-flex;align-items:baseline;gap:8px;background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:4px 14px}
-.count-n{font-family:'Suez One',Georgia,serif;font-size:1.35rem;color:var(--cobalt)}
+.count-n{font-size:1.35rem;font-weight:700;color:var(--cobalt)}
 
 /* now */
 .now{background:var(--now);color:#fff;border-radius:24px;padding:22px 22px 18px;margin:20px 0 28px}
@@ -43,8 +43,8 @@ button{cursor:pointer}
 .now-title{font-size:clamp(1.8rem,6vw,2.6rem);margin:10px 0 4px}
 .now-meta{margin:0;opacity:.9}
 .now-dod{margin:10px 0 0;background:rgba(255,255,255,.12);border-radius:12px;padding:8px 12px;max-width:60ch}
-.timer{font-family:'Suez One',Georgia,serif;font-size:2.4rem;margin:12px 0 0;font-variant-numeric:tabular-nums}
-.timer.over{font-family:'Assistant',sans-serif;font-size:1.1rem;font-weight:700}
+.timer{font-size:2.4rem;font-weight:700;margin:12px 0 0;font-variant-numeric:tabular-nums}
+.timer.over{font-size:1.1rem;font-weight:700}
 .now-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
 .b-light{background:#fff;color:#1B3170;border:0;border-radius:12px;padding:10px 18px;font-weight:700}
 .b-ghost{background:transparent;color:#fff;border:1.5px solid rgba(255,255,255,.7);border-radius:12px;padding:9px 16px;font-weight:600}
@@ -300,17 +300,17 @@ a.ovs:hover .ovs-n{text-decoration:underline}
 .st-dep label{display:flex;gap:8px;align-items:center;padding:3px 0}
 
 /* The compass (v1.4). Folded: one quiet line above the tray. Open: a surface of its own: warm paper
-   instead of the dashboard's blue-grey, edge to edge, no borders, chips or tiles, a light book serif,
+   instead of the dashboard's blue-grey, edge to edge, no borders, chips or tiles, larger quiet type
    and a lot of air. Nothing in it measures anything. */
-:root{--cp-bg:#F5F0E6;--cp-ink:#2E2A24;--cp-muted:#6E6556;--cp-line:#E0D6C4;--cp-serif:'Frank Ruhl Libre','David Libre',Georgia,serif}
+:root{--cp-bg:#F5F0E6;--cp-ink:#2E2A24;--cp-muted:#6E6556;--cp-line:#E0D6C4}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--cp-bg:#1B1915;--cp-ink:#EAE4D9;--cp-muted:#A59C8C;--cp-line:#37322A}}
 :root[data-theme="dark"]{--cp-bg:#1B1915;--cp-ink:#EAE4D9;--cp-muted:#A59C8C;--cp-line:#37322A}
 .compass{margin:0 0 22px}
 .compass summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"lbl fold" "line fold";gap:2px 14px;align-items:center;padding:2px 0 12px;border-bottom:1px solid var(--line)}
 .compass summary::-webkit-details-marker{display:none}
 .cp-lbl{grid-area:lbl;font-size:.78rem;letter-spacing:.06em;color:var(--cp-muted)}
-.cp-line{grid-area:line;font-family:var(--cp-serif);font-size:1.08rem;line-height:1.55;color:var(--ink);text-wrap:pretty}
-.cp-fold{grid-area:fold;color:var(--cp-muted);font-size:1.05rem;line-height:1;padding:6px 2px;transition:transform .4s ease}
+.cp-line{grid-area:line;font-size:1.08rem;line-height:1.55;color:var(--ink);text-wrap:pretty}
+.cp-fold{grid-area:fold;color:var(--cp-muted);font-size:.85rem;line-height:1;padding:6px 2px;transition:transform .4s ease}
 .cp-fold::before{content:'▾'}
 .compass[open]{background:var(--cp-bg);color:var(--cp-ink);box-shadow:0 0 0 100vmax var(--cp-bg);clip-path:inset(0 -100vmax);margin-bottom:30px}
 .compass[open] summary{border-bottom:0;padding:24px 4px 0;grid-template-areas:"lbl fold";max-width:34rem;margin:0 auto}
@@ -320,16 +320,16 @@ a.ovs:hover .ovs-n{text-decoration:underline}
 .cp-body{max-width:34rem;margin:0 auto;padding:40px 4px 48px;animation:cp-in .8s ease-out both}
 @keyframes cp-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 .cp-layers{list-style:none;margin:0;padding:0;padding-inline-start:24px;border-inline-start:1px solid var(--cp-line);display:grid;gap:56px}
-.compass .cp-t{font-family:'Assistant',system-ui,sans-serif;font-weight:400;font-size:.8rem;letter-spacing:.06em;color:var(--cp-muted);margin:0 0 12px}
-.cp-x{margin:0;font-family:var(--cp-serif);font-weight:300;white-space:pre-line;text-wrap:pretty;color:var(--cp-ink)}
-.cp-l1 .cp-x{font-size:clamp(1.6rem,5.6vw,2rem);line-height:1.55}
-.cp-l2 .cp-x{font-size:clamp(1.3rem,4.6vw,1.55rem);line-height:1.7}
-.cp-l3 .cp-x{font-size:clamp(1.15rem,4.1vw,1.35rem);line-height:1.85;font-weight:400}
-.cp-l4 .cp-x{font-size:clamp(1.08rem,3.9vw,1.22rem);line-height:1.9;font-weight:400}
+.compass .cp-t{font-weight:400;font-size:.8rem;letter-spacing:.06em;color:var(--cp-muted);margin:0 0 12px}
+.cp-x{margin:0;white-space:pre-line;text-wrap:pretty;color:var(--cp-ink)}
+.cp-l1 .cp-x{font-size:clamp(1.4rem,4.9vw,1.75rem);line-height:1.5}
+.cp-l2 .cp-x{font-size:clamp(1.17rem,4.1vw,1.38rem);line-height:1.65}
+.cp-l3 .cp-x{font-size:clamp(1.1rem,3.8vw,1.25rem);line-height:1.75}
+.cp-l4 .cp-x{font-size:clamp(1.05rem,3.6vw,1.15rem);line-height:1.8}
 .cp-close{display:block;margin:60px auto 0;background:none;border:0;padding:6px 14px;color:var(--cp-muted);font-size:.9rem;text-decoration:underline;text-decoration-color:var(--cp-line);text-underline-offset:5px}
 /* A project's answer to the compass question: a thread, not a tile. */
 .ov-why{margin:2px 0 12px;padding-inline-start:12px;border-inline-start:2px solid var(--cp-line)}
 .ov-why-q{margin:0;font-size:.78rem;color:var(--muted)}
-.ov-why-a{margin:2px 0 0;max-width:60ch;font-family:var(--cp-serif);font-size:1.05rem;line-height:1.6;white-space:pre-line;text-wrap:pretty}
-.ov-why-a.none{font-family:inherit;font-size:.9rem;color:var(--muted)}
+.ov-why-a{margin:2px 0 0;max-width:60ch;font-size:1.05rem;line-height:1.6;white-space:pre-line;text-wrap:pretty}
+.ov-why-a.none{font-size:.9rem;color:var(--muted)}
 .ov-why-a .b-link{color:var(--cobalt);font-size:.88rem}
