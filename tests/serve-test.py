@@ -8,11 +8,12 @@ Always:
 - Sends Cache-Control: no-store on everything. Otherwise Chrome keeps running an old app.js after an
   edit, and a test silently checks old code (this happened on madrid-trip).
 - Rewrites firebase.js and app.js as they're served, so the page reads and writes the collection
-  users/{uid}/projects-test instead of users/{uid}/projects, with its own timer key, and adds a red
-  TEST bar to the page. Files on disk are never modified.
+  users/{uid}/projects-test instead of users/{uid}/projects (and compass-test instead of compass),
+  with its own timer key, and adds a red TEST bar to the page. Files on disk are never modified.
 - Adds tests/seed-in-page.js: once signed in, if projects-test is empty, it fills it with the made-up
-  projects in tests/seed-fake.json. Without --emulator that is a write to the real Firebase project
-  (only under projects-test). Real data is never needed for testing.
+  projects and the made-up compass in tests/seed-fake.json. Without --emulator that is a write to
+  the real Firebase project (only under projects-test and compass-test). Real data is never needed
+  for testing.
 - Listens on 127.0.0.1 only.
 
 --emulator: fully offline, no real project and no Google account involved.
@@ -47,6 +48,7 @@ REWRITES = {
     ],
     '/firebase.js': [
         ("const PROJECTS = 'projects';", "const PROJECTS = 'projects-test';"),
+        ("const COMPASS = 'compass';", "const COMPASS = 'compass-test';"),
     ],
     '/index.html': [
         ('<body>', '<body>\n<div style="position:sticky;top:0;z-index:9;background:#B8352C;color:#fff;'

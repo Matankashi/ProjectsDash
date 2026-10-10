@@ -46,8 +46,15 @@ as this project's block (Madrid: "מדריד"), and `status` is `active` or `pau
 - The timer is per device, in localStorage.
 - A stream can carry links, shown under its name: `links: [{label, url}]` on the stream. Only
   `http(s)` addresses are shown. They're part of `streams`, so the same last-write-wins applies.
-- In the app, "עריכה" edits the goal, success criteria, calendar key and active/paused status (on
-  the overview panel), and milestones and links (on each stream).
+- In the app, "עריכה" edits the goal, the answer to the compass question, success criteria,
+  calendar key and active/paused status (on the overview panel), and milestones and links (on each
+  stream).
+- **The compass** (v1.4) sits above the projects, at `users/{uid}/compass/main`:
+  `{layers: [{title, text}], updatedAt}`, plain text. The home screen shows it as a folded band
+  above the tray (the first layer), which opens into a quiet page of its own. **The app only reads
+  it**: it is changed on purpose, rarely, with a script outside the app that previews the change
+  and reads it back. Each project's answer to "איך הפרויקט הזה מקדם את הכיוון שלי?" is
+  `project.compass`, a string, shown under the goal and edited in "עריכה".
 
 ## Security
 

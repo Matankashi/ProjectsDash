@@ -298,3 +298,38 @@ a.ovs:hover .ovs-n{text-decoration:underline}
 .gate-panel{margin-top:10px;background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:12px 16px}
 .gate-panel h3{font-size:1.05rem}.gate-panel h4{margin:12px 0 2px;font-size:.95rem}
 .st-dep label{display:flex;gap:8px;align-items:center;padding:3px 0}
+
+/* The compass (v1.4). Folded: one quiet line above the tray. Open: a surface of its own: warm paper
+   instead of the dashboard's blue-grey, edge to edge, no borders, chips or tiles, a light book serif,
+   and a lot of air. Nothing in it measures anything. */
+:root{--cp-bg:#F5F0E6;--cp-ink:#2E2A24;--cp-muted:#6E6556;--cp-line:#E0D6C4;--cp-serif:'Frank Ruhl Libre','David Libre',Georgia,serif}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--cp-bg:#1B1915;--cp-ink:#EAE4D9;--cp-muted:#A59C8C;--cp-line:#37322A}}
+:root[data-theme="dark"]{--cp-bg:#1B1915;--cp-ink:#EAE4D9;--cp-muted:#A59C8C;--cp-line:#37322A}
+.compass{margin:0 0 22px}
+.compass summary{list-style:none;cursor:pointer;display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"lbl fold" "line fold";gap:2px 14px;align-items:center;padding:2px 0 12px;border-bottom:1px solid var(--line)}
+.compass summary::-webkit-details-marker{display:none}
+.cp-lbl{grid-area:lbl;font-size:.78rem;letter-spacing:.06em;color:var(--cp-muted)}
+.cp-line{grid-area:line;font-family:var(--cp-serif);font-size:1.08rem;line-height:1.55;color:var(--ink);text-wrap:pretty}
+.cp-fold{grid-area:fold;color:var(--cp-muted);font-size:1.05rem;line-height:1;padding:6px 2px;transition:transform .4s ease}
+.cp-fold::before{content:'▾'}
+.compass[open]{background:var(--cp-bg);color:var(--cp-ink);box-shadow:0 0 0 100vmax var(--cp-bg);clip-path:inset(0 -100vmax);margin-bottom:30px}
+.compass[open] summary{border-bottom:0;padding:24px 4px 0;grid-template-areas:"lbl fold";max-width:34rem;margin:0 auto}
+.compass[open] .cp-line{display:none}
+.compass[open] .cp-fold{transform:rotate(180deg)}
+.compass :focus-visible{outline-color:var(--cp-muted);outline-offset:-3px}
+.cp-body{max-width:34rem;margin:0 auto;padding:40px 4px 48px;animation:cp-in .8s ease-out both}
+@keyframes cp-in{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.cp-layers{list-style:none;margin:0;padding:0;padding-inline-start:24px;border-inline-start:1px solid var(--cp-line);display:grid;gap:56px}
+.compass .cp-t{font-family:'Assistant',system-ui,sans-serif;font-weight:400;font-size:.8rem;letter-spacing:.06em;color:var(--cp-muted);margin:0 0 12px}
+.cp-x{margin:0;font-family:var(--cp-serif);font-weight:300;white-space:pre-line;text-wrap:pretty;color:var(--cp-ink)}
+.cp-l1 .cp-x{font-size:clamp(1.6rem,5.6vw,2rem);line-height:1.55}
+.cp-l2 .cp-x{font-size:clamp(1.3rem,4.6vw,1.55rem);line-height:1.7}
+.cp-l3 .cp-x{font-size:clamp(1.15rem,4.1vw,1.35rem);line-height:1.85;font-weight:400}
+.cp-l4 .cp-x{font-size:clamp(1.08rem,3.9vw,1.22rem);line-height:1.9;font-weight:400}
+.cp-close{display:block;margin:60px auto 0;background:none;border:0;padding:6px 14px;color:var(--cp-muted);font-size:.9rem;text-decoration:underline;text-decoration-color:var(--cp-line);text-underline-offset:5px}
+/* A project's answer to the compass question: a thread, not a tile. */
+.ov-why{margin:2px 0 12px;padding-inline-start:12px;border-inline-start:2px solid var(--cp-line)}
+.ov-why-q{margin:0;font-size:.78rem;color:var(--muted)}
+.ov-why-a{margin:2px 0 0;max-width:60ch;font-family:var(--cp-serif);font-size:1.05rem;line-height:1.6;white-space:pre-line;text-wrap:pretty}
+.ov-why-a.none{font-family:inherit;font-size:.9rem;color:var(--muted)}
+.ov-why-a .b-link{color:var(--cobalt);font-size:.88rem}

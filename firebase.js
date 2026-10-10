@@ -5,7 +5,8 @@
    watchProjects() follows the list; openProject() follows and saves one document. Nothing here
    ever creates a project document: there's no import, so a deleted document stays deleted.
    Since v1.3 a project's blocks are documents of their own, in the subcollection blocks/{eventId}:
-   see openBlocks() at the end of this file.
+   see openBlocks() at the end of this file. Since v1.4 the compass sits above the projects, read only:
+   see watchCompass().
 
    How saving and syncing fit together (the echo risk madrid-trip's budget.js avoids with getDoc,
    handled here because the dashboard needs onSnapshot for cross-device sync):
@@ -23,8 +24,9 @@
    - Fields this code doesn't know are never written, so newer data survives an older tab.
 
    tests/serve-test.py --emulator rewrites the two SDK import lines below and the getFirestore line
-   to point at the local emulators, and in both test modes rewrites the PROJECTS line so tests only
-   ever touch users/{uid}/projects-test. If you change those lines, update the rewrites there too. */
+   to point at the local emulators, and in both test modes rewrites the PROJECTS and COMPASS lines so
+   tests only ever touch users/{uid}/projects-test and compass-test. If you change those lines, update
+   the rewrites there too. */
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js";
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js";
@@ -52,6 +54,23 @@ export function watchProjects(uid, handlers) {
     handlers.onList(snap.docs.map(d => d.id));
   }, err => {
     console.error('projects-app: project list listener failed', err);
+    handlers.onError(err);
+  });
+}
+
+/* The compass (v1.4): users/{uid}/compass/main, one document above the projects, holding the layers
+   of direction as plain text: {layers: [{title, text}], updatedAt}. Projects end; the compass doesn't.
+   The app only reads it. There is deliberately no function in this file that writes it: changing it
+   is meant to be deliberate and rare, done outside the app with a previewed, read-back script.
+   tests/serve-test.py rewrites the COMPASS line so tests read users/{uid}/compass-test instead. */
+const COMPASS = 'compass';
+
+// onData(data) on every change, with null when the document doesn't exist; onError(err).
+export function watchCompass(uid, handlers) {
+  return onSnapshot(doc(db, 'users', uid, COMPASS, 'main'), snap => {
+    handlers.onData(snap.exists() ? snap.data() : null);
+  }, err => {
+    console.error('projects-app: compass listener failed', err);
     handlers.onError(err);
   });
 }

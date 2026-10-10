@@ -175,6 +175,36 @@ Rules from the user (2026-09-30); step 5 (RAG, gates rail) must follow them too:
   blocks, both named, and "2 מחכים" on the rail; refused with one ("1 מחכה"); accepted once both are
   confirmed, saved with its day; unticking works.
 
+## The compass (v1.4)
+
+Decided with the user 2026-10-10. The compass is the layer above the projects: why any of them
+exists. Projects end; the compass doesn't. **It is the one part of the app that doesn't measure
+anything: no lights, no percentages, no deficits, no counts, and no link to RAG or gates.** Keep it
+that way.
+
+- **`users/{uid}/compass/main`**: `{layers: [{title, text}], updatedAt}`. An array because the order
+  of the layers is the point (Firestore doesn't keep map key order). Texts are plain; line breaks in
+  them are real and rendered (`white-space: pre-line`). Layer 4 is plain text: it links to nothing.
+- **The app never writes the compass.** `firebase.js` has only `watchCompass()`, a listener; there
+  is deliberately no writer. The user changes it with a `!` script (snapshot, offline preview with a
+  character check, guarded write, read-back). Editing it in the app is a later decision, not a gap.
+- **The user's text never goes into a committed file.** The repo is public. Tests use the made-up
+  compass in `tests/seed-fake.json` (`compass-test`).
+- `ready()` waits for the compass's first snapshot, existing or not, so the band never pops in and
+  pushes the tray down. A missing document, a failed listener or malformed layers mean no band (or
+  fewer layers, each skip warned once), never a blocked page.
+- **Home only**, between the app bar and the tray (`compassView()`). Folded on every load: one line,
+  the first layer, about 90 px at 390 px wide, so the tray stays the first actionable thing. Open is a
+  separate surface (warm paper tokens `--cp-*`, edge to edge, Frank Ruhl Libre, no borders, chips or
+  tiles). The open state is kept in `ui.compassOpen` (a capture-phase `toggle` listener), because
+  every snapshot redraws the page.
+- **`project.compass`**: the project's answer to "איך הפרויקט הזה מקדם את הכיוון שלי?", a string,
+  shown under the goal on the card and the panel (`whyView()`), edited in "עריכה" (`data-form="why"`).
+  Saved as part of `project` (whole field, last write wins). Ends trimmed, CRLF to LF, cut to
+  `MAX_LEN.text`; saving empty deletes the field. No answer shows the question with a quiet "עוד לא
+  נכתבה תשובה": never a warning, never blocks activation.
+- Tested in the emulator (2026-10-10): see "Roadmap" for v1.4.
+
 ## Projects and the home screen (v1.2)
 
 - `app.js` keeps the artifact's views, which draw "the current project": `use(id)` points `state` and
@@ -317,7 +347,19 @@ data is seeded and has no screen). Decided 2026-09-30:
 - The live check found the tick guard untestable (nothing was awaiting); it is tested in the
   emulator only.
 
-**v1.4:**
+**v1.4: the compass** (built 2026-10-10, not yet released). See "The compass". Scope frozen to the
+compass band and the per-project answer; not built: a second project for income, global routines, any
+link between the compass and RAG. Emulator tests (2026-10-10): the folded band leaves the tray's
+first row inside a 390×844 screen; the open band keeps layer 4's one line break and layer 3 as one
+paragraph, stays open across a redraw and is folded after a reload; the compass document's
+`updateTime` is unchanged after a session of marks, answer edits and a rename; a missing, non-list,
+malformed or empty compass gives no band and no errors, and injected HTML shows as text; the answer
+editor saves exactly (trimmed ends, line break kept, CRLF to LF, 500 cap, empty deletes), reaches a
+second tab live, and survives a rename; no horizontal scroll at 390 px in either theme; the home
+(cards and single project) and project page render the same HTML as v1.3 apart from the compass
+parts; rules test 84/84 (compass paths added, rules unchanged).
+
+**v1.5** (moved from v1.4 on 2026-10-10, so v1.4 stays small):
 - **Remove the dual write to `doneEvents`** (`setDone()` in `app.js`, and the `doneEvents` branch of
   `changesBetween()`/`withChanges()` in `firebase.js`), once the user has confirmed v1.3 is stable.
   Don't remove it before that confirmation: `doneEvents` is the way back to v1.2.

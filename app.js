@@ -5,7 +5,7 @@
    Since v1.2 there can be several projects. The artifact's views draw "the current project": use(id)
    points `state` and cal.blocks at one project before its views run, and every event handler first
    calls use() for the project its element belongs to (the nearest [data-p]). */
-import {watchAuth,signIn,signOutUser,watchProjects,openProject,openBlocks,openSub,SERVER_NOW} from './firebase.js';
+import {watchAuth,signIn,signOutUser,watchProjects,watchCompass,openProject,openBlocks,openSub,SERVER_NOW} from './firebase.js';
 import * as gcal from './calendar.js';
 
 const LS_TIMER='madrid-dash-timer';
@@ -21,6 +21,7 @@ const app=document.getElementById('app');
 
 const projects={};           // id -> {id, state, sync, blocks, gates, syncs, snap, over}; state and blocks are null until their first snapshot
 let listed=null;             // project ids in the list, null until the list arrives
+let compass;                 // the compass document (v1.4): undefined until its first snapshot, null when there is none
 let state=null;              // the current project's state (see use())
 let cur=null;                // the current project's id
 let blocks={};               // the current project's block documents, by calendar event id (v1.3)
@@ -318,9 +319,32 @@ function overview(card){
   ].join('');
   const rows=state.streams.map(s=>{const p=streamPace(s);const inner=`<span class="ovs-n">${esc(s.name)}</span><span class="ovs-bar"><span class="ovs-fill ${p.cls}" style="width:${p.pct}%"></span></span><span class="ovs-p ${p.cls}">${p.pct}%</span>`;
     return card?`<li class="ovs" title="${esc(p.note)}">${inner}</li>`:`<li><a class="ovs" href="#st-${esc(s.id)}" title="${esc(p.note)}" aria-label="${esc(s.name)}: ${p.pct}%, ${esc(p.note)}">${inner}</a></li>`;}).join('');
-  const head=`<div class="ov-head">${card?`<h2>${esc(P.name)}</h2>`:`<h1>${esc(P.name)}</h1>`}${P.status==='paused'?'<span class="chip calm">מוקפא</span>':''}${card?'':`<button class="b-link ov-edit" data-act="edit-project" aria-expanded="${ui.editP===cur}">${ui.editP===cur?'סגור עריכה':'עריכה'}</button>`}</div>${P.goal?`<p class="goal">${esc(P.goal)}</p>`:''}${c?`<div class="count">${c}</div>`:''}`;
+  const head=`<div class="ov-head">${card?`<h2>${esc(P.name)}</h2>`:`<h1>${esc(P.name)}</h1>`}${P.status==='paused'?'<span class="chip calm">מוקפא</span>':''}${card?'':`<button class="b-link ov-edit" data-act="edit-project" aria-expanded="${ui.editP===cur}">${ui.editP===cur?'סגור עריכה':'עריכה'}</button>`}</div>${P.goal?`<p class="goal">${esc(P.goal)}</p>`:''}${whyView(P,card)}${c?`<div class="count">${c}</div>`:''}`;
   const body=`${head}<div class="ov-grid">${tiles}</div>${rows?`<ul class="ov-streams" aria-label="המסלולים">${rows}</ul>`:''}`;
   return card?`<a class="ov card" href="#/p/${encodeURIComponent(cur)}" data-p="${id}">${body}</a>`:`<header class="ov top">${body}</header>`;
+}
+/* The compass (v1.4): the one part of the app that doesn't measure anything. No lights, no numbers,
+   no deficits. Folded, it is one line, the first layer; open, a quiet surface of its own. Read only:
+   nothing in the app writes it. Shown on the home screen only. */
+const COMPASS_Q='איך הפרויקט הזה מקדם את הכיוון שלי?';
+const warnedCompass=new Set();
+function compassLayers(){
+  const ls=compass&&Array.isArray(compass.layers)?compass.layers:[];
+  if(compass&&!Array.isArray(compass.layers)&&!warnedCompass.has('layers')){warnedCompass.add('layers');console.warn('projects-app: the compass has no layers list');}
+  return ls.filter((l,i)=>{const ok=l&&typeof l.text==='string'&&l.text.trim()&&(l.title==null||typeof l.title==='string');
+    if(!ok&&!warnedCompass.has(i)){warnedCompass.add(i);console.warn('projects-app: skipped compass layer '+i+': it needs a text string');}return ok;});
+}
+function compassView(){
+  const ls=compassLayers();if(!ls.length)return '';
+  return `<details class="compass" id="compass"${ui.compassOpen?' open':''}><summary><span class="cp-lbl">המצפן</span><span class="cp-line">${esc(ls[0].text)}</span><span class="cp-fold" aria-hidden="true"></span></summary>
+  <div class="cp-body"><ol class="cp-layers">${ls.map((l,i)=>`<li class="cp-layer cp-l${Math.min(i+1,4)}">${l.title?`<h3 class="cp-t">${esc(l.title)}</h3>`:''}<p class="cp-x">${esc(l.text)}</p></li>`).join('')}</ol>
+  <button class="cp-close" data-act="compass-close">לקפל</button></div></details>`;
+}
+/* Each project's answer to the compass question, under its goal. No answer is not a warning: the
+   question stays, quietly, until there is one. */
+function whyView(P,card){
+  const a=typeof P.compass==='string'?P.compass.trim():'';
+  return `<div class="ov-why"><p class="ov-why-q">${COMPASS_Q}</p>${a?`<p class="ov-why-a">${esc(a)}</p>`:`<p class="ov-why-a none">עוד לא נכתבה תשובה${card?'':` · <button class="b-link" data-act="why-write">לכתוב תשובה</button>`}</p>`}</div>`;
 }
 /* Today's blocks from every active project, each with its done toggle. */
 function todayView(){
@@ -373,6 +397,7 @@ function editPanel(){
   return `<section class="sec edit" aria-labelledby="edit-h"><div class="sec-head"><h2 id="edit-h">עריכת הפרויקט</h2><button class="b-link" data-act="edit-project">סגור</button></div>
   <form class="edit-block" data-form="name"><h3><label for="ed-name">שם הפרויקט</label></h3><div class="form"><input id="ed-name" name="name" value="${esc(P.name||'')}" required maxlength="${MAX_LEN.title}"><button class="b-sec">שמור</button></div></form>
   <form class="edit-block" data-form="goal"><h3><label for="ed-goal">מטרה</label></h3><div class="form"><textarea id="ed-goal" name="goal" rows="2" maxlength="${MAX_LEN.text}">${esc(P.goal||'')}</textarea><button class="b-sec">שמור</button></div></form>
+  <form class="edit-block" data-form="why"><h3><label for="ed-why">${COMPASS_Q}</label></h3><p class="ed-help">התשובה מופיעה בכרטיס של הפרויקט, מתחת למטרה. שמירה ריקה מוחקת אותה.</p><div class="form"><textarea id="ed-why" name="why" rows="3" maxlength="${MAX_LEN.text}">${esc(typeof P.compass==='string'?P.compass:'')}</textarea><button class="b-sec">שמור</button></div></form>
   <div class="edit-block"><h3>קריטריוני הצלחה</h3>${sc.length?`<ul class="ed-list">${scRows}</ul>`:'<p class="muted">אין עדיין קריטריונים.</p>'}
     <form class="form" data-form="sc-add"><input name="text" required maxlength="${MAX_LEN.text}" placeholder="קריטריון חדש" aria-label="קריטריון חדש"><button class="b-sec">הוסף</button></form></div>
   <form class="edit-block" data-form="key" novalidate><h3><label for="ed-key">מילת היומן</label></h3><p class="ed-help">אירוע ביומן שייך לפרויקט אם הכותרת שלו מכילה את המילה, למשל "${esc(P.calendarKey||'מדריד')} — סאבלט: ...".</p>
@@ -494,7 +519,7 @@ function byDeadline(a,b){const x=nextDeadline(a),y=nextDeadline(b);return x<y?-1
 /* Home: today across projects, then the one active project's full page, or a card per active project. */
 function homeView(){
   const act=activeIds();
-  let h=bar(false)+trayView(act)+orphansView(act)+criticalBanner(act)+runnerView(act)+todayView();
+  let h=bar(false)+compassView()+trayView(act)+orphansView(act)+criticalBanner(act)+runnerView(act)+todayView();
   if(act.length===1){use(act[0]);h+=projectPage(pausedView());}
   else{h+=act.length?`<section class="cards sec" aria-label="פרויקטים פעילים">${act.slice().sort(byDeadline).map(id=>{use(id);return overview(true);}).join('')}</section>`:'<p class="muted sec">אין פרויקטים פעילים.</p>';h+=pausedView();}
   return h;
@@ -649,7 +674,7 @@ const BOOT={auth:'טוען…',loading:'טוען את הנתונים…',offline
 function bootView(){
   return `<section class="sec boot" aria-live="polite"><h2>${BOOT[view]}</h2>${viewMsg?`<p class="muted">${esc(viewMsg)}</p>`:''}${view==='empty'||view==='error'?'<button class="b-link out" data-act="signout">התנתקות</button>':''}</section>`;
 }
-const ready=()=>listed!==null&&listed.length>0&&view!=='error'&&listed.every(id=>projects[id]&&projects[id].state&&projects[id].blocks);
+const ready=()=>listed!==null&&listed.length>0&&view!=='error'&&compass!==undefined&&listed.every(id=>projects[id]&&projects[id].state&&projects[id].blocks);
 function readRoute(){const m=location.hash.match(/^#\/p\/([^/]+)$/);route=m?{name:'project',id:decodeURIComponent(m[1])}:{name:'home'};}
 function render(){
   if(!ready()){app.innerHTML=view==='login'?loginView():bootView();return;}
@@ -697,6 +722,8 @@ app.addEventListener('click',e=>{
     case 'more':ui.open[s.id]=!ui.open[s.id];render();break;
     case 'log':ui.showLog=!ui.showLog;render();break;
     case 'export':ui.exp=!ui.exp;render();break;
+    case 'compass-close':ui.compassOpen=false;render();{const el=document.getElementById('compass');if(el)el.scrollIntoView({block:'nearest'});}break;
+    case 'why-write':ui.editP=cur;ui.editSc=null;ui.keyDraft=null;ui.keyConfirm=null;ui.warnP=null;render();focusIn('#ed-why');break;
     case 'edit-project':ui.editP=ui.editP===cur?null:cur;ui.editSc=null;ui.keyDraft=null;ui.keyConfirm=null;ui.warnP=null;render();break;
     case 'edit-cancel':ui.editSc=ui.editMs=ui.editLink=ui.ask=null;render();break;
     case 'sc-edit':ui.editSc=eKey(+b.dataset.i);render();focusIn('[data-form="sc-edit"] input');break;
@@ -720,6 +747,9 @@ app.addEventListener('change',e=>{
     ui.gateWarn=null;c.met=t.checked;c.metOn=t.checked?iso(today()):null;putDoc('gates',t.dataset.g,{criteria:cr});render();}}
   else if(a==='ck-toggle'){const l=(blk(t.dataset.e).checklist||[]).map(c=>Object.assign({},c)),c=l[+t.dataset.i];if(c){c.done=t.checked;saveBlock(t.dataset.e,{checklist:l});}}
 });
+// The compass's open state outlives redraws (every snapshot redraws the page); a reload starts folded.
+// toggle doesn't bubble, so this listens in the capture phase.
+app.addEventListener('toggle',e=>{if(e.target.id==='compass')ui.compassOpen=e.target.open;},true);
 // The calendar key's match count updates while typing, in place, so the field keeps its focus.
 app.addEventListener('input',e=>{
   const t=e.target;if(t.dataset.act!=='key-input')return;useFor(t);
@@ -735,6 +765,7 @@ app.addEventListener('submit',e=>{
   switch(f.dataset.form){
     case 'name':if(v('name')){state.project.name=v('name').slice(0,MAX_LEN.title);commit();}return;
     case 'goal':state.project.goal=v('goal').slice(0,MAX_LEN.text);commit();return;
+    case 'why':{const t=v('why').replace(/\r\n?/g,'\n').slice(0,MAX_LEN.text);if(t)state.project.compass=t;else delete state.project.compass;commit();return;}
     case 'sc-add':if(v('text')){(state.project.success=state.project.success||[]).push(v('text').slice(0,MAX_LEN.text));commit();}return;
     case 'sc-edit':{const sc=state.project.success||[],i=+f.dataset.i;if(v('text')&&sc[i]!==undefined){sc[i]=v('text').slice(0,MAX_LEN.text);ui.editSc=null;commit();}return;}
     case 'key':saveKey(f,v('key'));return;
@@ -784,6 +815,8 @@ watchAuth(user=>{
     onOffline:()=>{if(listed===null){view='offline';render();}},
     onError:showError
   });
+  // The compass never stops the dashboard: a failed listener only means no band.
+  watchCompass(user.uid,{onData:d=>{compass=d;render();},onError:()=>{compass=null;render();}});
 });
 function showError(err){view='error';viewMsg=(err&&err.code==='permission-denied'?'אין הרשאה (permission-denied). ייתכן שחוקי Firestore או ה־UID בהם לא מעודכנים.':'שגיאה: '+((err&&(err.code||err.message))||'לא ידועה'))+' רענן את העמוד כדי לנסות שוב.';render();}
 // Opens a listener for each new project in the list and closes the ones that left it.

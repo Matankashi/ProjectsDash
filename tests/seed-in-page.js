@@ -1,7 +1,8 @@
 /* Test only: tests/serve-test.py adds this to the page in both test modes; the real site never loads it.
    Once signed in, if users/{uid}/projects-test is empty, it fills it with the made-up projects in
-   tests/seed-fake.json, so tests never need real data. It writes only under projects-test, only when
-   that list is empty, and only once per page load: deleting one test project doesn't bring it back. */
+   tests/seed-fake.json, so tests never need real data. It writes only under projects-test and
+   compass-test, only when the project list is empty, and only once per page load: deleting one test
+   project, or the test compass, doesn't bring it back. */
 import '../firebase.js';   // the app's Firebase setup (already pointed at the emulators in --emulator mode)
 import { getApp } from 'https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js';
 import { getAuth, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js';
@@ -18,6 +19,8 @@ onAuthStateChanged(getAuth(getApp()), async user => {
     const seed = await (await fetch('tests/seed-fake.json', { cache: 'no-store' })).json();
     const batch = writeBatch(db);
     Object.entries(seed.projects).forEach(([id, state]) => batch.set(doc(list, id), state));
+    // The compass (v1.4) sits above the projects. The app itself never writes it; only this seeder does.
+    if (seed.compass) batch.set(doc(db, 'users', user.uid, 'compass-test', 'main'), seed.compass);
     // Gates (v1.3) are dated relative to today, like the events in tests/fake-google.js.
     const day = n => { const d = new Date(); d.setDate(d.getDate() + n); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
     Object.entries(seed.gates || {}).forEach(([id, gates]) => {

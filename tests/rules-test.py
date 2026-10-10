@@ -64,8 +64,11 @@ outside = 'misc/doc'
 # v1.3: the subcollections under a project. The recursive match in firestore.rules covers them.
 SUBS = ['gates/G1', 'blocks/event-1', 'criticalPath/chain', 'checkpoints/2026-10-01']
 theirs_sub = theirs + '/blocks/event-1'
+# v1.4: the compass sits at user level, above the projects. The same recursive match covers it.
+USER_LEVEL = ['compass/main', 'compass-test/main']
 
-for path in [own, theirs, outside, theirs_sub] + [own + '/' + s for s in SUBS]:
+for path in [own, theirs, outside, theirs_sub] + [own + '/' + s for s in SUBS] + \
+        ['users/%s/%s' % (u, s) for u in (OWNER, OTHER) for s in USER_LEVEL]:
     if call('PATCH', path, ADMIN) != 200:
         sys.exit('could not seed %s in the emulator' % path)
 
@@ -105,6 +108,21 @@ for sub in SUBS:
         ('owner: read %s' % sub, 'GET', path, OWNER, OK),
         ('owner: write %s' % sub, 'PATCH', path, OWNER, OK),
         ('owner: list %s' % sub.split('/')[0], 'GET', coll, OWNER, OK),
+        ('owner: delete %s' % sub, 'DELETE', path, OWNER, OK),
+    ]
+
+for sub in USER_LEVEL:
+    path, coll, theirs_c = 'users/%s/%s' % (OWNER, sub), 'users/%s/%s' % (OWNER, sub.split('/')[0]), 'users/%s/%s' % (OTHER, sub)
+    CASES += [
+        ('signed out: read %s' % sub, 'GET', path, None, DENIED),
+        ('signed out: write %s' % sub, 'PATCH', path, None, DENIED),
+        ('other account: read %s' % sub, 'GET', path, OTHER, DENIED),
+        ('other account: write %s' % sub, 'PATCH', path, OTHER, DENIED),
+        ('other account: list %s' % sub.split('/')[0], 'GET', coll, OTHER, DENIED),
+        ('other account: its own %s' % sub, 'GET', theirs_c, OTHER, DENIED),
+        ('owner: another user\'s %s' % sub, 'GET', theirs_c, OWNER, DENIED),
+        ('owner: read %s' % sub, 'GET', path, OWNER, OK),
+        ('owner: write %s' % sub, 'PATCH', path, OWNER, OK),
         ('owner: delete %s' % sub, 'DELETE', path, OWNER, OK),
     ]
 
