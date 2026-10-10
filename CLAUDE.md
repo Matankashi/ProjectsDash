@@ -1,6 +1,6 @@
 # Projects app
 
-**Version: v1.3**
+**Version: v1.4**
 
 A private project dashboard: static files on GitHub Pages (`https://matankashi.github.io/ProjectsDash/`,
 repo `git@github.com:Matankashi/ProjectsDash.git`, served from `main`), Firestore for data,
@@ -205,9 +205,11 @@ that way.
   nothing is written. The draft lives in `ui.cpDraft` (an `input` listener) and errors in `ui.cpErr`,
   so a redraw from any snapshot keeps what's typed; `render()` puts the focus and caret back on a
   `data-cp` field. On success the editor closes; on failure it stays open with the draft and the
-  error. Layers can't be added or removed in the app, and there's no editor without a compass
-  document.
-- **The `!` script stays the backup path** (it holds personal text, so it never goes in the repo):
+  error. There's no editor without a compass document. **Layers can't be added or removed in the
+  app, by the user's decision (2026-10-10): four layers is the structure; being able to add them
+  would grow it to nine and it would stop being a compass. Don't build it.**
+- **The `!` script stays the backup path**: `~/Documents/projects-app-backup/compass.py` (mode 600; it
+  holds personal text, so it never goes in the repo):
   `snapshot`, `preview`, `write` (creates a missing document; over an existing one it shows the
   diff and needs the live `updateTime` as an argument, so it refuses if the app changed the text
   since; backup first, read-back after) and `readback` (shape checks, per-layer changes since the
@@ -371,7 +373,8 @@ data is seeded and has no screen). Decided 2026-09-30:
 - The live check found the tick guard untestable (nothing was awaiting); it is tested in the
   emulator only.
 
-**v1.4: the compass** (built 2026-10-10, not yet released). See "The compass". Scope frozen to the
+**v1.4: the compass, released 2026-10-10.** See "The compass". Also one font: Arial everywhere, no web
+fonts (working rule 5). Scope frozen to the
 compass band, its editor (added 2026-10-10, before the tag) and the per-project answer; not built: a second project for income, global routines, any
 link between the compass and RAG. Emulator tests (2026-10-10): the folded band leaves the tray's
 first row inside a 390×844 screen; the open band keeps layer 4's one line break and layer 3 as one
@@ -388,6 +391,10 @@ unchanged writes nothing; an empty text is refused in place with nothing written
 trimmed, CRLF as LF, collapsed title spaces, the untouched layers, a malformed layer and an unknown
 field as they were, and sets `updatedAt`; HTML shows as text; another tab updates; 500 cap; no
 horizontal scroll at 390 px in either theme. 54/54.
+Live check (2026-10-10, the user's phone): the band folded and open; the ספרד answer typed in the
+editor and read back exact (120 characters); layer 1's em-dash removed in the compass editor and read
+back with the script: compass `updateTime` moved, layers 2–4 unchanged, the project document not
+written by the compass save.
 
 **v1.5** (moved from v1.4 on 2026-10-10, so v1.4 stays small):
 - **Remove the dual write to `doneEvents`** (`setDone()` in `app.js`, and the `doneEvents` branch of
