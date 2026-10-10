@@ -190,9 +190,28 @@ that way.
 - **`users/{uid}/compass/main`**: `{layers: [{title, text}], updatedAt}`. An array because the order
   of the layers is the point (Firestore doesn't keep map key order). Texts are plain; line breaks in
   them are real and rendered (`white-space: pre-line`). Layer 4 is plain text: it links to nothing.
-- **The app never writes the compass.** `firebase.js` has only `watchCompass()`, a listener; there
-  is deliberately no writer. The user changes it with a `!` script (snapshot, offline preview with a
-  character check, guarded write, read-back). Editing it in the app is a later decision, not a gap.
+- **The app writes the compass only from its editor.** (Reversed 2026-10-10. Until then the app had no
+  writer and every change went through a `!` script; the user decided that routing every wording
+  tweak through a script is friction that would stop them editing it at all.) `firebase.js` has
+  `watchCompass()` and one writer, `saveCompass(uid, data)`: the whole document with `setDoc`,
+  `updatedAt` from the server, last write wins (like `project`). `data` is the document as last seen
+  with the edited layers in place, so unknown fields and malformed layers survive. `app.js` calls it
+  in one place, `saveCompassForm()`, reached only from the editor's submit. Nothing else writes it:
+  not marks, gate ticks, renames, answer edits or anything else (tested, see "Roadmap").
+- **The editor**: "עריכה" next to "לקפל" in the open band (`compassEditor()`, `ui.cpEdit`): per layer a
+  title input and a text textarea; one "שמור" for all. Same rules as the project's answer: ends
+  trimmed, line breaks kept, CRLF to LF, cut to `MAX_LEN` (title 200, whitespace collapsed; text
+  500). An empty text is refused in place (an empty layer would disappear). Nothing changed means
+  nothing is written. The draft lives in `ui.cpDraft` (an `input` listener) and errors in `ui.cpErr`,
+  so a redraw from any snapshot keeps what's typed; `render()` puts the focus and caret back on a
+  `data-cp` field. On success the editor closes; on failure it stays open with the draft and the
+  error. Layers can't be added or removed in the app, and there's no editor without a compass
+  document.
+- **The `!` script stays the backup path** (it holds personal text, so it never goes in the repo):
+  `snapshot`, `preview`, `write` (creates a missing document; over an existing one it shows the
+  diff and needs the live `updateTime` as an argument, so it refuses if the app changed the text
+  since; backup first, read-back after) and `readback` (shape checks, per-layer changes since the
+  2026-10-10 text, special characters, the ספרד answer).
 - **The user's text never goes into a committed file.** The repo is public. Tests use the made-up
   compass in `tests/seed-fake.json` (`compass-test`).
 - `ready()` waits for the compass's first snapshot, existing or not, so the band never pops in and
@@ -353,16 +372,22 @@ data is seeded and has no screen). Decided 2026-09-30:
   emulator only.
 
 **v1.4: the compass** (built 2026-10-10, not yet released). See "The compass". Scope frozen to the
-compass band and the per-project answer; not built: a second project for income, global routines, any
+compass band, its editor (added 2026-10-10, before the tag) and the per-project answer; not built: a second project for income, global routines, any
 link between the compass and RAG. Emulator tests (2026-10-10): the folded band leaves the tray's
 first row inside a 390×844 screen; the open band keeps layer 4's one line break and layer 3 as one
 paragraph, stays open across a redraw and is folded after a reload; the compass document's
-`updateTime` is unchanged after a session of marks, answer edits and a rename; a missing, non-list,
+`updateTime` is unchanged after a session of marks, a partial, a gate tick and untick, milestone
+toggles, answer edits, renames and opening and cancelling the compass editor; a missing, non-list,
 malformed or empty compass gives no band and no errors, and injected HTML shows as text; the answer
 editor saves exactly (trimmed ends, line break kept, CRLF to LF, 500 cap, empty deletes), reaches a
 second tab live, and survives a rename; no horizontal scroll at 390 px in either theme; the home
 (cards and single project) and project page render the same HTML as v1.3 apart from the compass
-parts; rules test 84/84 (compass paths added, rules unchanged).
+parts; rules test 84/84 (compass paths added, rules unchanged). The compass editor (G8): fields
+filled exactly; a draft and its focus survive another device's write; cancel drops it; saving
+unchanged writes nothing; an empty text is refused in place with nothing written; a save stores ends
+trimmed, CRLF as LF, collapsed title spaces, the untouched layers, a malformed layer and an unknown
+field as they were, and sets `updatedAt`; HTML shows as text; another tab updates; 500 cap; no
+horizontal scroll at 390 px in either theme. 54/54.
 
 **v1.5** (moved from v1.4 on 2026-10-10, so v1.4 stays small):
 - **Remove the dual write to `doneEvents`** (`setDone()` in `app.js`, and the `doneEvents` branch of

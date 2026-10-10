@@ -51,9 +51,10 @@ as this project's block (Madrid: "מדריד"), and `status` is `active` or `pau
   stream).
 - **The compass** (v1.4) sits above the projects, at `users/{uid}/compass/main`:
   `{layers: [{title, text}], updatedAt}`, plain text. The home screen shows it as a folded band
-  above the tray (the first layer), which opens into a quiet page of its own. **The app only reads
-  it**: it is changed on purpose, rarely, with a script outside the app that previews the change
-  and reads it back. Each project's answer to "איך הפרויקט הזה מקדם את הכיוון שלי?" is
+  above the tray (the first layer), which opens into a quiet page of its own. "עריכה" there edits
+  each layer's title and text; the save writes the whole document (last write wins). That editor is
+  the only place the app writes the compass. A script outside the app (previewed, guarded, read
+  back) is the backup path. Each project's answer to "איך הפרויקט הזה מקדם את הכיוון שלי?" is
   `project.compass`, a string, shown under the goal and edited in "עריכה".
 
 ## Security

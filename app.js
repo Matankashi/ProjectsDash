@@ -5,7 +5,7 @@
    Since v1.2 there can be several projects. The artifact's views draw "the current project": use(id)
    points `state` and cal.blocks at one project before its views run, and every event handler first
    calls use() for the project its element belongs to (the nearest [data-p]). */
-import {watchAuth,signIn,signOutUser,watchProjects,watchCompass,openProject,openBlocks,openSub,SERVER_NOW} from './firebase.js';
+import {watchAuth,signIn,signOutUser,watchProjects,watchCompass,saveCompass,openProject,openBlocks,openSub,SERVER_NOW} from './firebase.js';
 import * as gcal from './calendar.js';
 
 const LS_TIMER='madrid-dash-timer';
@@ -22,6 +22,7 @@ const app=document.getElementById('app');
 const projects={};           // id -> {id, state, sync, blocks, gates, syncs, snap, over}; state and blocks are null until their first snapshot
 let listed=null;             // project ids in the list, null until the list arrives
 let compass;                 // the compass document (v1.4): undefined until its first snapshot, null when there is none
+let ownerUid=null;           // the signed-in account, for the compass writer
 let state=null;              // the current project's state (see use())
 let cur=null;                // the current project's id
 let blocks={};               // the current project's block documents, by calendar event id (v1.3)
@@ -31,7 +32,8 @@ let view='auth',viewMsg='';  // what render() shows until every listed project h
 
 let ui={open:{},stuck:false,warn:null,showLog:false,exp:false,warnP:null,
   editP:null,editSc:null,editMs:null,editLink:null,keyDraft:null,keyConfirm:null,confirmDel:null,  // editing (v1.2)
-  run:null,ask:null,editPlan:false,gate:null,gateWarn:null};  // the open block {p,e}, the status being asked about {k,st,w}, its plan form (v1.3)
+  run:null,ask:null,editPlan:false,gate:null,gateWarn:null,  // the open block {p,e}, the status being asked about {k,st,w}, its plan form (v1.3)
+  cpEdit:false,cpDraft:null,cpErr:null,cpSaving:false};  // the compass editor: what's typed so far survives redraws (v1.4)
 
 let saveText='';
 
@@ -324,21 +326,56 @@ function overview(card){
   return card?`<a class="ov card" href="#/p/${encodeURIComponent(cur)}" data-p="${id}">${body}</a>`:`<header class="ov top">${body}</header>`;
 }
 /* The compass (v1.4): the one part of the app that doesn't measure anything. No lights, no numbers,
-   no deficits. Folded, it is one line, the first layer; open, a quiet surface of its own. Read only:
-   nothing in the app writes it. Shown on the home screen only. */
+   no deficits. Folded, it is one line, the first layer; open, a quiet surface of its own, with
+   "עריכה" for its editor. The editor is the only place the app writes it. Home screen only. */
 const COMPASS_Q='איך הפרויקט הזה מקדם את הכיוון שלי?';
 const warnedCompass=new Set();
+// The layers that can be shown, each with its index in the stored list (the editor writes back by index,
+// so a malformed layer it skips is kept as it is).
 function compassLayers(){
   const ls=compass&&Array.isArray(compass.layers)?compass.layers:[];
   if(compass&&!Array.isArray(compass.layers)&&!warnedCompass.has('layers')){warnedCompass.add('layers');console.warn('projects-app: the compass has no layers list');}
-  return ls.filter((l,i)=>{const ok=l&&typeof l.text==='string'&&l.text.trim()&&(l.title==null||typeof l.title==='string');
-    if(!ok&&!warnedCompass.has(i)){warnedCompass.add(i);console.warn('projects-app: skipped compass layer '+i+': it needs a text string');}return ok;});
+  return ls.map((l,i)=>({l,i})).filter(({l,i})=>{const ok=l&&typeof l.text==='string'&&l.text.trim()&&(l.title==null||typeof l.title==='string');
+    if(!ok&&!warnedCompass.has(i)){warnedCompass.add(i);console.warn('projects-app: skipped compass layer '+i+': it needs a text string');}return ok;}).map(({l,i})=>Object.assign({},l,{i}));
 }
 function compassView(){
   const ls=compassLayers();if(!ls.length)return '';
+  const body=ui.cpEdit?compassEditor(ls):`<ol class="cp-layers">${ls.map((l,n)=>`<li class="cp-layer cp-l${Math.min(n+1,4)}">${l.title?`<h3 class="cp-t">${esc(l.title)}</h3>`:''}<p class="cp-x">${esc(l.text)}</p></li>`).join('')}</ol>
+  <div class="cp-acts"><button class="cp-close" data-act="compass-edit">עריכה</button><button class="cp-close" data-act="compass-close">לקפל</button></div>`;
   return `<details class="compass" id="compass"${ui.compassOpen?' open':''}><summary><span class="cp-lbl">המצפן</span><span class="cp-line">${esc(ls[0].text)}</span><span class="cp-fold" aria-hidden="true"></span></summary>
-  <div class="cp-body"><ol class="cp-layers">${ls.map((l,i)=>`<li class="cp-layer cp-l${Math.min(i+1,4)}">${l.title?`<h3 class="cp-t">${esc(l.title)}</h3>`:''}<p class="cp-x">${esc(l.text)}</p></li>`).join('')}</ol>
-  <button class="cp-close" data-act="compass-close">לקפל</button></div></details>`;
+  <div class="cp-body">${body}</div></details>`;
+}
+/* The compass editor: a title and a text per layer, saved together as the whole document. Same rules as
+   the project's answer: ends trimmed, line breaks kept (CRLF to LF), cut to MAX_LEN. A layer's text
+   can't be saved empty (an empty layer would disappear). What's typed lives in ui.cpDraft, so a
+   redraw from any snapshot keeps it; errors are kept in ui.cpErr for the same reason. */
+function compassEditor(ls){
+  const d=ui.cpDraft||{},val=(k,i,x)=>d[k+i]!==undefined?d[k+i]:x;
+  const rows=t=>Math.min(12,Math.max(3,t.split('\n').reduce((n,l)=>n+Math.ceil((l.length||1)/34),0)));
+  return `<form class="cp-edit" data-form="compass" novalidate>${ls.map((l,n)=>{const t=val('t',l.i,l.title||''),x=val('x',l.i,l.text);
+    return `<fieldset class="cp-ed-l"><legend class="cp-t">שכבה ${n+1}</legend>
+    <label for="cp-ed-t${l.i}">כותרת</label><input id="cp-ed-t${l.i}" name="t${l.i}" data-cp="t${l.i}" value="${esc(t)}" maxlength="${MAX_LEN.title}">
+    <label for="cp-ed-x${l.i}">טקסט</label><textarea id="cp-ed-x${l.i}" name="x${l.i}" data-cp="x${l.i}" rows="${rows(x)}" maxlength="${MAX_LEN.text}">${esc(x)}</textarea></fieldset>`;}).join('')}
+  <p class="warn form-err" role="alert"${ui.cpErr?'':' hidden'}>${esc(ui.cpErr||'')}</p>
+  <div class="cp-acts"><button class="b-sec" id="cp-save"${ui.cpSaving?' disabled':''}>${ui.cpSaving?'שומר…':'שמור'}</button><button type="button" class="b-link" data-act="compass-cancel">ביטול</button></div></form>`;
+}
+function saveCompassForm(f){
+  const raw=compass&&Array.isArray(compass.layers)?compass.layers:null;if(!raw||ui.cpSaving)return;
+  const d=new FormData(f),layers=JSON.parse(JSON.stringify(raw));
+  const err=t=>{ui.cpErr=t;const el=f.querySelector('.form-err');if(el){el.textContent=t;el.hidden=false;}};
+  for(const [n,l] of compassLayers().entries()){
+    const x=String(d.get('x'+l.i)||'').replace(/\r\n?/g,'\n').trim().slice(0,MAX_LEN.text);
+    if(!x){err(`הטקסט של שכבה ${n+1} ריק. שכבה בלי טקסט לא תוצג, אז היא לא נשמרת ריקה.`);return;}
+    layers[l.i].title=String(d.get('t'+l.i)||'').replace(/\s+/g,' ').trim().slice(0,MAX_LEN.title);
+    layers[l.i].text=x;
+  }
+  const done=()=>{ui.cpSaving=false;ui.cpEdit=false;ui.cpDraft=null;ui.cpErr=null;render();};
+  if(JSON.stringify(layers)===JSON.stringify(raw)){done();return;}   // nothing changed: nothing to write
+  ui.cpSaving=true;ui.cpErr=null;const btn=f.querySelector('#cp-save');if(btn){btn.disabled=true;btn.textContent='שומר…';}
+  saveCompass(ownerUid,Object.assign({},compass,{layers})).then(done,e=>{
+    console.error('projects-app: saving the compass failed',e);ui.cpSaving=false;
+    err('השמירה נכשלה ('+((e&&(e.code||e.message))||'שגיאה')+'). מה שכתבת נשאר כאן, נסה שוב.');render();
+  });
 }
 /* Each project's answer to the compass question, under its goal. No answer is not a warning: the
    question stays, quietly, until there is one. */
@@ -678,9 +715,12 @@ const ready=()=>listed!==null&&listed.length>0&&view!=='error'&&compass!==undefi
 function readRoute(){const m=location.hash.match(/^#\/p\/([^/]+)$/);route=m?{name:'project',id:decodeURIComponent(m[1])}:{name:'home'};}
 function render(){
   if(!ready()){app.innerHTML=view==='login'?loginView():bootView();return;}
+  // A field of the compass editor keeps its focus and caret through a redraw (its text is in ui.cpDraft).
+  const a=document.activeElement,keep=a&&a.dataset&&a.dataset.cp?{id:a.id,s:a.selectionStart,e:a.selectionEnd}:null;
   const p=route.name==='project'&&projects[route.id];
   if(p){const top=trayView([route.id])+orphansView([route.id])+criticalBanner([route.id])+runnerView([route.id]);use(route.id);app.innerHTML=bar(true)+top+projectPage();}
   else app.innerHTML=homeView();
+  if(keep){const el=document.getElementById(keep.id);if(el){el.focus({preventScroll:true});try{el.setSelectionRange(keep.s,keep.e);}catch(e){console.error('projects-app: restoring the caret failed',e);}}}
   tick();
 }
 
@@ -723,6 +763,8 @@ app.addEventListener('click',e=>{
     case 'log':ui.showLog=!ui.showLog;render();break;
     case 'export':ui.exp=!ui.exp;render();break;
     case 'compass-close':ui.compassOpen=false;render();{const el=document.getElementById('compass');if(el)el.scrollIntoView({block:'nearest'});}break;
+    case 'compass-edit':{ui.cpEdit=true;ui.cpDraft=null;ui.cpErr=null;render();const f=app.querySelector('.cp-edit textarea');if(f)f.focus({preventScroll:true});}break;
+    case 'compass-cancel':ui.cpEdit=false;ui.cpDraft=null;ui.cpErr=null;render();break;
     case 'why-write':ui.editP=cur;ui.editSc=null;ui.keyDraft=null;ui.keyConfirm=null;ui.warnP=null;render();focusIn('#ed-why');break;
     case 'edit-project':ui.editP=ui.editP===cur?null:cur;ui.editSc=null;ui.keyDraft=null;ui.keyConfirm=null;ui.warnP=null;render();break;
     case 'edit-cancel':ui.editSc=ui.editMs=ui.editLink=ui.ask=null;render();break;
@@ -752,7 +794,9 @@ app.addEventListener('change',e=>{
 app.addEventListener('toggle',e=>{if(e.target.id==='compass')ui.compassOpen=e.target.open;},true);
 // The calendar key's match count updates while typing, in place, so the field keeps its focus.
 app.addEventListener('input',e=>{
-  const t=e.target;if(t.dataset.act!=='key-input')return;useFor(t);
+  const t=e.target;
+  if(t.dataset.cp){(ui.cpDraft=ui.cpDraft||{})[t.dataset.cp]=t.value;return;}   // the compass editor's draft
+  if(t.dataset.act!=='key-input')return;useFor(t);
   ui.keyDraft=t.value;ui.keyConfirm=null;const kn=keyNote(t.value);
   const out=app.querySelector('#key-count'),btn=app.querySelector('#key-save');
   if(out){out.className=kn.warn?'warn':'ed-ok';out.textContent=kn.text;}if(btn)btn.textContent='שמור';
@@ -760,6 +804,7 @@ app.addEventListener('input',e=>{
 app.addEventListener('submit',e=>{
   e.preventDefault();const f=e.target,d=new FormData(f);
   if(f.dataset.form==='login'){login(d);return;}
+  if(f.dataset.form==='compass'){saveCompassForm(f);return;}
   useFor(f);
   const v=k=>String(d.get(k)||'').trim(),s=f.dataset.s?S(f.dataset.s):null;
   switch(f.dataset.form){
@@ -808,7 +853,7 @@ let signedIn=false;
 watchAuth(user=>{
   if(!user){if(signedIn)location.reload();else{view='login';render();}return;}
   if(signedIn)return;
-  signedIn=true;view='loading';render();
+  signedIn=true;ownerUid=user.uid;view='loading';render();
   startCalendar();
   watchProjects(user.uid,{
     onList:ids=>syncList(user.uid,ids),

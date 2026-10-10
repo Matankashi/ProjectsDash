@@ -5,8 +5,8 @@
    watchProjects() follows the list; openProject() follows and saves one document. Nothing here
    ever creates a project document: there's no import, so a deleted document stays deleted.
    Since v1.3 a project's blocks are documents of their own, in the subcollection blocks/{eventId}:
-   see openBlocks() at the end of this file. Since v1.4 the compass sits above the projects, read only:
-   see watchCompass().
+   see openBlocks() at the end of this file. Since v1.4 the compass sits above the projects: see
+   watchCompass() and saveCompass().
 
    How saving and syncing fit together (the echo risk madrid-trip's budget.js avoids with getDoc,
    handled here because the dashboard needs onSnapshot for cross-device sync):
@@ -60,8 +60,9 @@ export function watchProjects(uid, handlers) {
 
 /* The compass (v1.4): users/{uid}/compass/main, one document above the projects, holding the layers
    of direction as plain text: {layers: [{title, text}], updatedAt}. Projects end; the compass doesn't.
-   The app only reads it. There is deliberately no function in this file that writes it: changing it
-   is meant to be deliberate and rare, done outside the app with a previewed, read-back script.
+   saveCompass() is its only writer, and the app calls it only from the compass editor. (Until
+   2026-10-10 the app had no writer at all and every change went through a script; the user found
+   that routing each wording tweak through a script was friction that would stop them editing it.)
    tests/serve-test.py rewrites the COMPASS line so tests read users/{uid}/compass-test instead. */
 const COMPASS = 'compass';
 
@@ -73,6 +74,15 @@ export function watchCompass(uid, handlers) {
     console.error('projects-app: compass listener failed', err);
     handlers.onError(err);
   });
+}
+
+// Writes the whole compass document, last write wins (like a field of `project`). `data` is the
+// document as last seen with the edited layers in place, so fields this code doesn't know survive.
+// Resolves when the server has the write; the caller reports failures.
+export function saveCompass(uid, data) {
+  const copy = Object.assign({}, data);
+  delete copy.updatedAt;
+  return setDoc(doc(db, 'users', uid, COMPASS, 'main'), Object.assign(JSON.parse(JSON.stringify(copy)), { updatedAt: serverTimestamp() }));
 }
 
 // A plain JSON copy (which also drops undefined, which Firestore rejects), without updatedAt,

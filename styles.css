@@ -327,6 +327,18 @@ a.ovs:hover .ovs-n{text-decoration:underline}
 .cp-l3 .cp-x{font-size:clamp(1.1rem,3.8vw,1.25rem);line-height:1.75}
 .cp-l4 .cp-x{font-size:clamp(1.05rem,3.6vw,1.15rem);line-height:1.8}
 .cp-close{display:block;margin:60px auto 0;background:none;border:0;padding:6px 14px;color:var(--cp-muted);font-size:.9rem;text-decoration:underline;text-decoration-color:var(--cp-line);text-underline-offset:5px}
+.cp-acts{display:flex;justify-content:center;gap:18px;margin-top:60px}
+.cp-acts .cp-close{margin:0}
+/* The compass editor: the same surface, plain fields, nothing loud. 16px inputs so iOS doesn't zoom. */
+.cp-edit{display:grid;gap:30px}
+.cp-ed-l{border:0;margin:0;padding:0;display:grid;gap:6px;min-width:0}
+.cp-ed-l legend{padding:0}
+.cp-ed-l label{font-size:.8rem;color:var(--cp-muted)}
+.cp-ed-l input,.cp-ed-l textarea{width:100%;border:1px solid var(--cp-line);background:transparent;border-radius:10px;padding:8px 10px;color:var(--cp-ink);font-size:1rem;line-height:1.6}
+.cp-ed-l textarea{resize:vertical}
+.cp-edit .cp-acts{margin-top:0;align-items:center}
+.cp-edit .b-link{color:var(--cp-muted)}
+.cp-edit .form-err{margin:0}
 /* A project's answer to the compass question: a thread, not a tile. */
 .ov-why{margin:2px 0 12px;padding-inline-start:12px;border-inline-start:2px solid var(--cp-line)}
 .ov-why-q{margin:0;font-size:.78rem;color:var(--muted)}
