@@ -396,6 +396,39 @@ editor and read back exact (120 characters); layer 1's em-dash removed in the co
 back with the script: compass `updateTime` moved, layers 2–4 unchanged, the project document not
 written by the compass save.
 
+**Next, after the user lands: checklist projects** (decided 2026-10-31; not built, no deadline).
+A project can be a plain checklist: no calendar, no schedule, never measured. The first one is the
+real document `spain-status`, created 2026-10-31 by `~/Documents/projects-app-backup/spain-status.py`
+(mode 600, it holds personal text): four groups (streams), every milestone `date: null`, `status:
+"paused"` so that the Madrid home stays as it is until after the flight.
+
+What v1.4 does with such a project (emulator, 2026-10-31):
+- No `calendarKey` and no `match` words are safe. A missing `log` crashes `logView()` and the project
+  page never draws; a missing `maxHeavy` prints "0 מתוך undefined". So the document carries `log: []`
+  and `maxHeavy: 2`.
+- It is measured all the same: the overview's % and tiles, a % bar per stream, the calendar panel,
+  "מוקד כבד", and empty "מה כבר עשיתי" and "הכללים" sections.
+- A closed stream shows at most 2 open items and drops an item the moment it's ticked, so a group
+  that is all done shows nothing. Seeing the whole list means opening the stream's edit mode.
+- A second active project turns home into cards, which moves the first project's full page off home.
+
+To build:
+1. **`project.checklist: true`**, a flag in the data, like `critical` (no project or stream id in
+   code). Its page: name, goal and the groups, every item visible and tickable, no numbers and no
+   calendar parts. On home: a quiet link. It doesn't count as the active project that gets the full
+   page, so another project keeps its home. **It doesn't count toward `MAX_ACTIVE` (the user's
+   decision, 2026-10-31): checklist projects aren't work projects, they're reference.**
+2. **Create and edit checklists in the app, without a script.** This is the part that matters most to
+   the user: today every structural change goes through Claude and a script. They must be able to
+   create a checklist project, add, rename and delete a group, and add, rename and delete an item.
+   Today the app can't create a project and has no UI to add, rename or delete a stream; items can
+   already be added, edited and deleted in a stream's edit mode, inside the tracker UI. Creating a
+   project reverses "nothing in the app creates a project document" (see "Data and sync"), and a
+   deleted one must still stay deleted. Deletes take two taps (`delButton()`).
+3. **Move `spain-status` over** when this is live: `checklist: true`, then `status: "active"`, as one
+   approved, previewed real-data write. Until then, don't tap "הפעל" on it: that turns home into
+   cards.
+
 **v1.5** (moved from v1.4 on 2026-10-10, so v1.4 stays small):
 - **Remove the dual write to `doneEvents`** (`setDone()` in `app.js`, and the `doneEvents` branch of
   `changesBetween()`/`withChanges()` in `firebase.js`), once the user has confirmed v1.3 is stable.
