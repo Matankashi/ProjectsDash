@@ -1,6 +1,6 @@
 # Projects app
 
-**Version: v1.4**
+**Version: v1.5**
 
 A private project dashboard: static files on GitHub Pages (`https://matankashi.github.io/ProjectsDash/`,
 repo `git@github.com:Matankashi/ProjectsDash.git`, served from `main`), Firestore for data,
@@ -450,8 +450,13 @@ To build:
    approved, previewed real-data write. Until then, don't tap "הפעל" on it: that turns home into
    cards.
 
-**v1.5: frozen streams and archived projects** (2026-11-13). See "Frozen streams and archived
-projects". Also `goal` keeps its line breaks.
+**v1.5: frozen streams and archived projects, released 2026-11-13.** See "Frozen streams and
+archived projects". Also `goal` keeps its line breaks. Code `164465e`. Live check (2026-11-13, after
+the approved real-data writes): Madrid `archived` sits alone under "בארכיון" with no button;
+`relocation` (the user's new strategy) shows its 7 streams in order with `padron` "קפוא" (dashed,
+boxes disabled, no heavy toggle), G1–G3, "1 מתוך 10" (the frozen item left out) and its 3-paragraph
+goal; no console errors. Milestone dates are set by the user in a stream's edit mode (no code needed).
+The writes: `~/Documents/projects-app-backup/relocation.py` and `relocation-rebuild.py`, backups beside them.
 
 **v1.6** (moved from v1.4 on 2026-10-10, and from v1.5 on 2026-11-13):
 - **Remove the dual write to `doneEvents`** (`setDone()` in `app.js`, and the `doneEvents` branch of
