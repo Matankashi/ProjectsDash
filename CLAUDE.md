@@ -249,12 +249,33 @@ that way.
   blocks). The save status, "יומן Google" and sign-out moved to the app bar (`bar()`).
 - New optional fields inside `project`: `calendarKey` (the word in the event title that marks this
   project's blocks, e.g. "מדריד" for "מדריד — סאבלט: ..."; no key means no blocks) and `status`
-  (`active`/`paused`, missing = active). `flight`, `buffer` and `decision` are optional: the countdown,
+  (`active`/`paused`/`archived`, missing = active; see "Frozen streams and archived projects"). `flight`, `buffer` and `decision` are optional: the countdown,
   timeline and rules draw only what exists. Timeline ticks are computed (1st and 15th of each month
   plus the end date), which gives Madrid the artifact's 1.10, 15.10, 1.11, 14.11.
 - Verified in stage 1: the Madrid dashboard sections (now, 7-day list, streams, deadlines, timeline,
   log, rules) render identical HTML to v1.1 with the same data, apart from clock times and the new
   `id="st-<stream>"` anchors.
+
+## Frozen streams and archived projects (2026-11-13)
+
+- **Stream status `frozen` ("קפוא")**: a stream that is not worked on now (first use: the padrón route
+  in `relocation`, frozen while the consular route is active; the two are mutually exclusive). Effects:
+  dashed, muted card (`.st-frozen`); its checkboxes are disabled and `ms-toggle` refuses a change
+  anyway; no "מוקד כבד" toggle, and `isHeavy()` leaves it out of the heavy count even if `heavy: true`
+  is stored; `inRag()` leaves it out of RAG; `projectCounted()` leaves its milestones out of the
+  project's % and out of the deadlines (they stay in the stream's own card and its own %). Nothing enforces "only one of two routes active" (`exclusiveWith` was skipped on purpose).
+- **Project status `archived` ("בארכיון")**: a finished project, kept readable. It's not active (no
+  "היום", no blocks fetched, never counts toward `MAX_ACTIVE`), and has its own collapsed "בארכיון" row
+  on home with no "הפעל" button. Its page shows a "בארכיון" chip; the edit panel's status block has
+  no button, and `activate`/`pause` ignore an archived project. Nothing in the app archives or
+  un-archives: that's a script write, previewed and approved like any real-data write.
+- Emulator-tested 2026-11-13: frozen card, disabled boxes, a forced change saved nothing, no heavy
+  toggle and "0 מתוך 2" with a frozen `heavy: true` stream, no RAG light without `rag: false`; freezing
+  and unfreezing from the menu; 3 active + 2 archived activates with no warning, and the limit still
+  warns at 3 active + 1 paused; archived page and edit panel; `goal` keeps line breaks
+  (`white-space: pre-line`); no horizontal scroll at 500 px (Chrome's minimum) in both themes; a
+  frozen stream with a done and a dated item: the project reads 1 of 21 (not 2 of 26) and the next
+  deadline skips the frozen date.
 
 ## Editing (v1.2)
 
@@ -429,7 +450,10 @@ To build:
    approved, previewed real-data write. Until then, don't tap "הפעל" on it: that turns home into
    cards.
 
-**v1.5** (moved from v1.4 on 2026-10-10, so v1.4 stays small):
+**v1.5: frozen streams and archived projects** (2026-11-13). See "Frozen streams and archived
+projects". Also `goal` keeps its line breaks.
+
+**v1.6** (moved from v1.4 on 2026-10-10, and from v1.5 on 2026-11-13):
 - **Remove the dual write to `doneEvents`** (`setDone()` in `app.js`, and the `doneEvents` branch of
   `changesBetween()`/`withChanges()` in `firebase.js`), once the user has confirmed v1.3 is stable.
   Don't remove it before that confirmation: `doneEvents` is the way back to v1.2.

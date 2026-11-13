@@ -32,7 +32,7 @@ button{cursor:pointer}
 .top-row{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
 .top h1{font-size:clamp(1.6rem,5vw,2rem)}
 .save{font-size:.85rem;color:var(--muted)}
-.goal{margin:6px 0 10px;color:var(--muted);max-width:60ch}
+.goal{margin:6px 0 10px;color:var(--muted);max-width:60ch;white-space:pre-line}   /* a goal typed on several lines keeps its line breaks */
 .count{display:inline-flex;align-items:baseline;gap:8px;background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:4px 14px}
 .count-n{font-size:1.35rem;font-weight:700;color:var(--cobalt)}
 
@@ -100,6 +100,7 @@ button{cursor:pointer}
 .st-habit{border-inline-start-color:var(--green)}
 .st-stuck{border-inline-start-color:var(--red)}
 .st-done{border-inline-start-color:var(--green);opacity:.7}
+.st-frozen{border-style:dashed;border-inline-start-color:var(--muted);opacity:.6}   /* frozen: not worked on, items can't be ticked */
 .st.is-focus{box-shadow:0 0 0 2px var(--cobalt)}
 .st-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
 .st-head h3{font-size:1.15rem}
@@ -223,6 +224,7 @@ a.ovs:hover .ovs-n{text-decoration:underline}
 .paused li:first-child{border-top:0}
 .paused li a{font-weight:700;color:inherit}
 .paused li .muted{flex:1 1 200px;font-size:.88rem}
+.archived li{opacity:.7}
 @media (max-width:520px){.ov-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.ov{padding:16px 14px}}
 
 /* v1.2: editing */
